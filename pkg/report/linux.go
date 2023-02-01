@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -135,19 +136,114 @@ func ctorLinux(cfg *config) (reporterImpl, []string, error) {
 
 const contextConsole = "console"
 
+func extractCrashes(log string) *[]Trace {
+	fmt.Printf("creating report from output with %d PC's\n", strings.Count(log, "ffffffff"))
+
+	var traces []Trace
+	context := regexp.MustCompile(`\[ *[0-9.]+\]\[ *T([0-9]+)\] ([0-9]+)/([0-9]+)\](.*)`)
+	for _, line := range strings.Split(log, "\n") {
+		result := context.FindStringSubmatch(line)
+		if result == nil || len(result) != 5 {
+			if len(result) == 4 {
+				fmt.Printf("Warning: could not parse line with regex result:")
+				for i, res := range result {
+					fmt.Printf("%d: %s\n", i, res)
+				}
+				os.Exit(1)
+			}
+			continue
+		}
+		thread, err := strconv.Atoi(result[1])
+		if err != nil {
+			panic(err)
+		}
+		num, err := strconv.Atoi(result[2])
+		if err != nil {
+			panic(err)
+		}
+		maxnum, err := strconv.Atoi(result[3])
+		if err != nil {
+			panic(err)
+		}
+		rest := result[4]
+
+		var found bool = false
+		for _, trace := range traces {
+			if trace.Thread == thread && trace.MaxNumMessages == maxnum && *trace.Counter+1 == num {
+				if (*trace.Messages)[num] != "" && num != maxnum {
+					fmt.Printf("Warning: overwriting message %d/%d of thread %d\n", num, maxnum, thread)
+				}
+				(*trace.Messages)[num] = rest
+				(*trace.Counter) += 1
+				found = true
+				break
+			}
+		}
+		if !found {
+			//fmt.Printf("found new trace with thread %d and %d/%d messages\n", thread, num, maxnum)
+			messagesArray := make([]string, maxnum+1)
+			newTrace := Trace{thread, maxnum, &messagesArray, new(int), nil, nil, nil}
+			*newTrace.Counter = num
+			traces = append(traces, newTrace)
+			(*newTrace.Messages)[num] = rest
+		}
+	}
+	for i := 0; i < len(traces); i++ {
+		trace := &traces[i]
+		if len(*trace.Messages) != trace.MaxNumMessages+1 {
+			fmt.Printf("Warning: thread %d has %d messages, but expected %d\n", trace.Thread, len(*trace.Messages), trace.MaxNumMessages+1)
+		}
+		missing := 0
+		pcs := []uint64{}
+		for i, message := range *trace.Messages {
+			if message == "" && i != 0 {
+				missing += 1
+			} else {
+				if missing > 0 {
+					fmt.Printf("Warning: thread %d has %d missing messages between %d and %d\n", trace.Thread, missing, i-missing, i)
+					missing = 0
+				}
+
+				for len(message) >= 16 {
+					pc, err := strconv.ParseUint(message[:16], 16, 64)
+					if err != nil {
+						panic(err)
+					}
+					pcs = append(pcs, pc)
+					message = message[16:]
+				}
+				if len(message) != 0 {
+					fmt.Printf("Warning: thread %d has dangling message %s\n", trace.Thread, message)
+				}
+
+			}
+		}
+		trace.Pcs = &pcs
+		if missing > 0 {
+			fmt.Printf("Warning: thread %d has %d missing messages between %d and %d\n", trace.Thread, missing, len(*trace.Messages)-missing, len(*trace.Messages))
+			missing = 0
+		}
+
+	}
+	fmt.Printf("done, found %d different traces\n", len(traces))
+	return &traces
+}
+
 func (ctx *linux) ContainsCrash(output []byte) bool {
 	return containsCrash(output, linuxOopses, ctx.ignores)
 }
 
-func (ctx *linux) Parse(output []byte) *Report {
+func (ctx *linux) Parse(output []byte, instance int) *Report {
 	oops, startPos, context := ctx.findFirstOops(output)
 	if oops == nil {
 		return nil
 	}
 	for questionable := false; ; questionable = true {
+		//fmt.Printf("Parsing for linux\n")
 		rep := &Report{
 			Output:   output,
 			StartPos: startPos,
+			Traces:   extractCrashes(string(output)),
 		}
 		endPos, reportEnd, report, prefix := ctx.findReport(output, oops, startPos, context, questionable)
 		rep.EndPos = endPos
@@ -362,6 +458,7 @@ func (ctx *linux) extractContext(line []byte) string {
 }
 
 func (ctx *linux) Symbolize(rep *Report) error {
+	fmt.Printf("Symbolizing %v\n", rep.Title)
 	if ctx.vmlinux != "" {
 		if err := ctx.symbolize(rep); err != nil {
 			return err
@@ -389,6 +486,7 @@ func (ctx *linux) symbolize(rep *Report) error {
 	var symbolized []byte
 	s := bufio.NewScanner(bytes.NewReader(rep.Report))
 	prefix := rep.reportPrefixLen
+	var crashFrames []symbolizer.Frame
 	for s.Scan() {
 		line := append([]byte{}, s.Bytes()...)
 		line = append(line, '\n')
@@ -397,10 +495,74 @@ func (ctx *linux) symbolize(rep *Report) error {
 			prefix += len(newLine) - len(line)
 		}
 		symbolized = append(symbolized, newLine...)
+		frames := symbolizeLineToFrame(symb.Symbolize, ctx.symbols, ctx.vmlinux, ctx.kernelBuildSrc, line)
+		if frames != nil {
+			crashFrames = append(crashFrames, frames...)
+		}
+	}
+
+	if rep.Traces == nil {
+		fmt.Printf("Skipping as traces is nil")
+	} else if len(*rep.Traces) != 1 {
+		fmt.Printf("Skipping as %v traces\n", len(*rep.Traces))
+	} else {
+		trace := &(*rep.Traces)[0]
+		if trace.Pcs == nil {
+			fmt.Printf("Skipping as no PCs for trace %v\n", trace)
+		} else {
+			frameArray, err := symb.SymbolizeArray(ctx.vmlinux, *trace.Pcs)
+			if err != nil {
+				return err
+			}
+			trace.Frames = &frameArray
+		}
+		trace.CrashFrames = &crashFrames
 	}
 	rep.Report = symbolized
 	rep.reportPrefixLen = prefix
 	return nil
+}
+
+func symbolizeLineToFrame(symbFunc func(bin string, pc uint64) ([]symbolizer.Frame, error),
+	symbols map[string][]symbolizer.Symbol, vmlinux, strip string, line []byte) []symbolizer.Frame {
+	match := linuxSymbolizeRe.FindSubmatchIndex(line)
+	if match == nil {
+		return nil
+	}
+	fn := line[match[2]:match[3]]
+	off, err := strconv.ParseUint(string(line[match[4]:match[5]]), 16, 64)
+	if err != nil {
+		return nil
+	}
+	size, err := strconv.ParseUint(string(line[match[6]:match[7]]), 16, 64)
+	if err != nil {
+		return nil
+	}
+	symb := symbols[string(fn)]
+	if len(symb) == 0 {
+		return nil
+	}
+	var funcStart uint64
+	for _, s := range symb {
+		if funcStart == 0 || int(size) == s.Size {
+			funcStart = s.Addr
+		}
+	}
+	pc := funcStart + off
+	if !linuxRipFrame.Match(line) {
+		// Usually we have return PCs, so we need to look at the previous instruction.
+		// But RIP lines contain the exact faulting PC.
+		pc--
+	}
+	frames, err := symbFunc(vmlinux, pc)
+	if err != nil || len(frames) == 0 {
+		return nil
+	}
+	if len(frames) != 1 {
+		// TODO
+		// fmt.Printf("symbolizeLineToFrame: more than one frame from line:\n %s\n", string(line))
+	}
+	return frames
 }
 
 func symbolizeLine(symbFunc func(bin string, pc uint64) ([]symbolizer.Frame, error),

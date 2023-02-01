@@ -84,6 +84,7 @@ func Image(params Params) (details ImageDetails, err error) {
 		}
 	}
 	details, err = builder.build(params)
+	// fmt.Printf("Build linux kernel finished.\n")
 	if details.CompilerID == "" {
 		// Fill in the compiler info even if the build failed.
 		var idErr error

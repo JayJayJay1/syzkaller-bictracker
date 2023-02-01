@@ -211,6 +211,7 @@ type ExecutionResult struct {
 
 func (inst *Instance) MonitorExecutionRaw(outc <-chan []byte, errc <-chan error,
 	reporter *report.Reporter, exit ExitCondition, beforeContextSize int) (res *ExecutionResult) {
+	// fmt.Printf("MONITOR: starting execution raw\n")
 	if beforeContextSize == 0 {
 		beforeContextSize = beforeContextDefault
 	}
@@ -235,11 +236,13 @@ type monitor struct {
 	reporter      *report.Reporter
 	exit          ExitCondition
 	output        []byte
+	fulloutput    []byte
 	beforeContext int
 	matchPos      int
 }
 
 func (mon *monitor) monitorExecution() *report.Report {
+	// fmt.Printf("MONITOR: execution started\n")
 	ticker := time.NewTicker(tickerPeriod * mon.inst.timeouts.Scale)
 	defer ticker.Stop()
 	lastExecuteTime := time.Now()
@@ -261,6 +264,7 @@ func (mon *monitor) monitorExecution() *report.Report {
 				}
 				return nil
 			default:
+				fmt.Printf("MONITOR: errc: %v\n", err)
 				// Note: connection lost can race with a kernel oops message.
 				// In such case we want to return the kernel oops.
 				crash := ""
@@ -270,12 +274,15 @@ func (mon *monitor) monitorExecution() *report.Report {
 				return mon.extractError(crash)
 			}
 		case out, ok := <-mon.outc:
+			// fmt.Printf("MONITOR1: %s", out)
 			if !ok {
 				mon.outc = nil
 				continue
 			}
 			lastPos := len(mon.output)
 			mon.output = append(mon.output, out...)
+			mon.fulloutput = append(mon.fulloutput, out...)
+
 			if bytes.Contains(mon.output[lastPos:], executingProgram1) ||
 				bytes.Contains(mon.output[lastPos:], executingProgram2) {
 				lastExecuteTime = time.Now()
@@ -310,6 +317,7 @@ func (mon *monitor) monitorExecution() *report.Report {
 				return mon.extractError(noOutputCrash)
 			}
 		case <-Shutdown:
+			fmt.Printf("MONITOR: shutdown\n")
 			return nil
 		}
 	}
@@ -318,6 +326,7 @@ func (mon *monitor) monitorExecution() *report.Report {
 func (mon *monitor) extractError(defaultError string) *report.Report {
 	diagOutput, diagWait := []byte{}, false
 	if defaultError != "" {
+		fmt.Printf("Diagnose by defaultError\n")
 		diagOutput, diagWait = mon.inst.diagnose(mon.createReport(defaultError))
 	}
 	// Give it some time to finish writing the error message.
@@ -330,11 +339,13 @@ func (mon *monitor) extractError(defaultError string) *report.Report {
 	}
 	if defaultError == "" && mon.reporter.ContainsCrash(mon.output[mon.matchPos:]) {
 		// We did not call Diagnose above because we thought there is no error, so call it now.
+		fmt.Printf("Diagnose by contained crash\n")
 		diagOutput, diagWait = mon.inst.diagnose(mon.createReport(defaultError))
 		if diagWait {
 			mon.waitForOutput()
 		}
 	}
+	fmt.Printf("Extracting error and creating report...\n")
 	rep := mon.createReport(defaultError)
 	if rep == nil {
 		return nil
@@ -347,7 +358,8 @@ func (mon *monitor) extractError(defaultError string) *report.Report {
 }
 
 func (mon *monitor) createReport(defaultError string) *report.Report {
-	rep := mon.reporter.ParseFrom(mon.output, mon.matchPos)
+	fmt.Printf("Creating report for instance number %d\n", mon.inst.index)
+	rep := mon.reporter.ParseFrom(mon.output, mon.matchPos, mon.inst.index)
 	if rep == nil {
 		if defaultError == "" {
 			return nil
@@ -408,5 +420,5 @@ var (
 	afterContext         = 128 << 10
 
 	tickerPeriod         = 10 * time.Second
-	waitForOutputTimeout = 10 * time.Second
+	waitForOutputTimeout = 100 * time.Second
 )

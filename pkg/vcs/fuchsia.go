@@ -68,6 +68,10 @@ func (ctx *fuchsia) SwitchCommit(commit string) (*Commit, error) {
 	return nil, fmt.Errorf("not implemented for fuchsia")
 }
 
+func (ctx *fuchsia) ApplyPatch(commit string) error {
+	return fmt.Errorf("not implemented for fuchsia")
+}
+
 func (ctx *fuchsia) HeadCommit() (*Commit, error) {
 	return nil, fmt.Errorf("not implemented for fuchsia")
 }

@@ -23,7 +23,7 @@ func (ctx *freebsd) ContainsCrash(output []byte) bool {
 	return containsCrash(output, freebsdOopses, ctx.ignores)
 }
 
-func (ctx *freebsd) Parse(output []byte) *Report {
+func (ctx *freebsd) Parse(output []byte, instance int) *Report {
 	rep := &Report{
 		Output: output,
 	}

@@ -155,6 +155,70 @@ func (git *git) SwitchCommit(commit string) (*Commit, error) {
 	return git.HeadCommit()
 }
 
+func (git *git) ApplyPatch(commit string) error {
+	availablePatchesInOrder := [5]string{"1a2383e8b84c0451fd9b1eec3b9aab16f30b597c", "8d470a45d1a65e6a308aeee5da7f5b37d3303c04", "9df918698408fd914493aba0b7858fef50eba63a", "2bb2b7b57f81255c13f4395ea911d6bdc70c9fe2", "a54df7622717a40ddec95fd98086aff8ba7839a6"}
+	patchesApplicableFor := map[string]string{
+		"51094a24b85e29138b7fa82ef1e1b4fe19c90046": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"7535b832c6399b5ebfc5b53af5c51dd915ee2538": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"48ea09cddae0b794cde2070f106ef676703dbcd3": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"8b05aa26336113c4cea25f1c333ee8cd4fc212a6": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"9fc9e278a5c0b708eeffaf47d6eb0c82aa74ed78": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"79cc1ba7badf9e7a12af99695a557e9ce27ee967": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"9360d035a579d95d1e76c471061b9065b18a0eb1": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"5d5dd3e4a86a64cc69fa0fdd32f769b1d97a9a83": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"0a64ce6e5442bbd96cbe9057d9ba1edab244f25b": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"665fe72a7d4f0ad17923e0a5ff2e6cc64d57c970": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"2852ca7fba9f77b204f0fe953b31fadd0057c936": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"51889d225ce2ce118d8413eb4282045add81a689": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"07a22b61946f0b80065b0ddcc703b715f84355f5": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"20fb0c8272bbb102d15bdd11aa64f828619dd7cc": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"38335cc5ffafa111210ad6bbe5a63a87db38ee68": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"b87f02307d3cfbda768520f0687c51ca77e14fc3": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"44d35720c9a660074b77ab9de37abf2c01c5b44f": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"537e62c865dcb9b91d07ed83f8615b71fa0b51bb": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"595b893e2087de306d0781795fb8ec47873596a6": "a54df7622717a40ddec95fd98086aff8ba7839a6",
+		"2bb2b7b57f81255c13f4395ea911d6bdc70c9fe2": "2bb2b7b57f81255c13f4395ea911d6bdc70c9fe2",
+		"9df918698408fd914493aba0b7858fef50eba63a": "9df918698408fd914493aba0b7858fef50eba63a",
+		"f953f140f318a641c443b0b8c618155ed90a7a10": "9df918698408fd914493aba0b7858fef50eba63a",
+		"8d470a45d1a65e6a308aeee5da7f5b37d3303c04": "8d470a45d1a65e6a308aeee5da7f5b37d3303c04",
+		"1a2383e8b84c0451fd9b1eec3b9aab16f30b597c": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"e83a4472bf9f556d01984048e398e64246c4dd6f": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"23b36fec7e14f8cf1c17e832e53dd4761e0dfe83": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"c985aafb60e972c0a6b8d0bd65e03af5890b748a": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"93d102f094be9beab28e5afb656c188b16a3793b": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"f39650de687e35766572ac89dbcd16a5911e2f0a": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"2f31ad64a9cce8b2409d2d4563482adfb8664082": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"3f388f28639fd19d5bf6df7a882c94ccfbf49c2b": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"63037f74725ddd8a767ed2ad0369e60a3bf1f2ce": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"79076e1241bb3bf02d0aac7d39120d8161fe07b1": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"5916d5f9b3347344a3d96ba6b54cf8e290eba96a": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+		"60c958d8df9cfc40b745d6cd583cfbfa7525ead6": "1a2383e8b84c0451fd9b1eec3b9aab16f30b597c",
+	}
+
+	// Determine last commit which changed "kernel/panic.c"
+	// git log --pretty=format:%H -S "kernel/panic.c" -- kernel/panic.c
+	lastChangeCommit, err := git.git("log", "--pretty=format:%H", "-n", "1", "--", "kernel/panic.c")
+	if err != nil {
+		panic(err)
+	}
+
+	patch, ok := patchesApplicableFor[string(lastChangeCommit)]
+	if !ok {
+		for _, patchToTest := range availablePatchesInOrder {
+			if _, err := git.git("apply", "--check", "/data/jakob.steeg-thesis/workspace/patches/"+patchToTest+".txt"); err == nil {
+				fmt.Println("Applied patch " + patchToTest + " by testing all patches.\n")
+				return nil
+			}
+		}
+		panic("No patch found for commit " + commit)
+	}
+	fmt.Println("Applying patch " + patch + "\n")
+	if _, err := git.git("apply", "/data/jakob.steeg-thesis/workspace/patches/"+patch+".txt"); err != nil {
+		panic(err)
+	}
+	return nil
+}
+
 func (git *git) clone(repo, branch string) error {
 	if git.precious {
 		return fmt.Errorf("won't reinit precious repo")
@@ -212,7 +276,7 @@ func (git *git) initRepo(reason error) error {
 }
 
 func (git *git) Contains(commit string) (bool, error) {
-	_, err := git.git("merge-base", "--is-ancestor", commit, "HEAD")
+	_, err := git.git("branch", "--contains", commit)
 	return err == nil, nil
 }
 
@@ -434,6 +498,9 @@ func (git *git) git(args ...string) ([]byte, error) {
 			return nil, err
 		}
 	}
+	//fmt.Printf("running command: %v\n", cmd)
+	//fmt.Printf("Params: %v %v %v\n", cmd.Path, cmd.Dir, cmd.Args)
+
 	return osutil.Run(time.Hour, cmd)
 }
 

@@ -77,6 +77,10 @@ func (rg *ReportGenerator) prepareFileMap(progs []Prog) (map[string]*file, error
 	if err := rg.lazySymbolize(progs); err != nil {
 		return nil, err
 	}
+	fmt.Printf("Preparing filemap, progs:\n")
+	for _, prog1 := range progs {
+		fmt.Printf("Prog here:%v\n---\n", prog1)
+	}
 	files := make(map[string]*file)
 	for _, unit := range rg.Units {
 		files[unit.Name] = &file{
@@ -86,16 +90,17 @@ func (rg *ReportGenerator) prepareFileMap(progs []Prog) (map[string]*file, error
 			totalPCs: len(unit.PCs),
 		}
 	}
-	progPCs := make(map[uint64]map[int]bool)
+	progPCs := make(map[uint64]map[int]int)
 	for i, prog := range progs {
-		for _, pc := range prog.PCs {
+		for j, pc := range prog.PCs {
 			if progPCs[pc] == nil {
-				progPCs[pc] = make(map[int]bool)
+				progPCs[pc] = make(map[int]int)
 			}
-			progPCs[pc][i] = true
+			progPCs[pc][i] = j
 		}
 	}
 	matchedPC := false
+	mapPCsToFrames := make(map[int]backend.Frame)
 	for _, frame := range rg.Frames {
 		f := getFile(files, frame.Name, frame.Path, frame.Module.Name)
 		ln := f.lines[frame.StartLine]
@@ -104,6 +109,8 @@ func (rg *ReportGenerator) prepareFileMap(progs []Prog) (map[string]*file, error
 			f.uncovered = append(f.uncovered, frame.Range)
 			continue
 		}
+		fmt.Printf("Covered frame:%v\n", frame)
+		mapPCsToFrames[progPCs[frame.PC][0]] = frame
 		// Covered frame.
 		f.covered = append(f.covered, frame.Range)
 		matchedPC = true
@@ -119,6 +126,16 @@ func (rg *ReportGenerator) prepareFileMap(progs []Prog) (map[string]*file, error
 		}
 		f.lines[frame.StartLine] = ln
 	}
+	// iterate map, sorted by key
+	var keys []int
+	for k := range mapPCsToFrames {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	for _, k := range keys {
+		fmt.Printf("Index:%v, Frame:%v\n", k, mapPCsToFrames[k])
+	}
+
 	if !matchedPC {
 		return nil, fmt.Errorf("coverage doesn't match any coverage callbacks")
 	}

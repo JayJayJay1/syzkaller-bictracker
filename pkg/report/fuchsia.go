@@ -55,7 +55,7 @@ func (ctx *fuchsia) ContainsCrash(output []byte) bool {
 	return containsCrash(output, zirconOopses, ctx.ignores)
 }
 
-func (ctx *fuchsia) Parse(output []byte) *Report {
+func (ctx *fuchsia) Parse(output []byte, instance int) *Report {
 	// We symbolize here because zircon output does not contain even function names.
 	symbolized := ctx.symbolize(output)
 	rep := simpleLineParser(symbolized, zirconOopses, zirconStackParams, ctx.ignores)

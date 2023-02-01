@@ -70,7 +70,7 @@ func Run(crashLog []byte, cfg *mgrconfig.Config, features *host.Features, report
 	}
 	crashStart := len(crashLog)
 	crashTitle, crashType := "", report.Unknown
-	if rep := reporter.Parse(crashLog); rep != nil {
+	if rep := reporter.Parse(crashLog, 0); rep != nil {
 		crashStart = rep.StartPos
 		crashTitle = rep.Title
 		crashType = rep.Type

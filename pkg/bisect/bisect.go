@@ -32,6 +32,11 @@ type Config struct {
 	Manager         *mgrconfig.Config
 }
 
+type BicTrackerConfig struct {
+	Config   *Config
+	TraceDir string
+}
+
 type KernelConfig struct {
 	Repo        string
 	Branch      string
@@ -64,6 +69,7 @@ type ReproConfig struct {
 
 type env struct {
 	cfg          *Config
+	tracedir     string
 	repo         vcs.Repo
 	bisecter     vcs.Bisecter
 	minimizer    vcs.ConfigMinimizer
@@ -111,6 +117,7 @@ type Result struct {
 // Run does the bisection and returns either the Result,
 // or, if the crash is not reproduced on the start commit, an error.
 func Run(cfg *Config) (*Result, error) {
+	// fmt.Printf("Running")
 	if err := checkConfig(cfg); err != nil {
 		return nil, err
 	}
@@ -129,7 +136,80 @@ func Run(cfg *Config) (*Result, error) {
 	return runImpl(cfg, repo, inst)
 }
 
+func RunSingle(btcfg *BicTrackerConfig) (*TestResult, error) {
+	// fmt.Printf("Running")
+	cfg := btcfg.Config
+	if err := checkConfig(cfg); err != nil {
+		return nil, err
+	}
+	cfg.Manager.Cover = false // it's not supported somewhere back in time
+	repo, err := vcs.NewRepo(cfg.Manager.TargetOS, cfg.Manager.Type, cfg.Manager.KernelSrc)
+	if err != nil {
+		return nil, err
+	}
+	inst, err := instance.NewEnv(cfg.Manager)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = repo.CheckoutBranch(cfg.Kernel.Repo, cfg.Kernel.Branch); err != nil {
+		return nil, err
+	}
+	testRes, err := runImplSingle(btcfg, repo, inst)
+	if testRes == nil {
+		return nil, err
+	}
+	return &TestResult{
+		Verdict:    testRes.verdict,
+		Com:        testRes.com,
+		Rep:        testRes.rep,
+		KernelSign: testRes.kernelSign,
+	}, err
+}
+
+func runImplSingle(btcfg *BicTrackerConfig, repo vcs.Repo, inst instance.Env) (*testResult, error) {
+	fmt.Printf("Starting single test: \n")
+	cfg := btcfg.Config
+	minimizer, ok := repo.(vcs.ConfigMinimizer)
+	if !ok && len(cfg.Kernel.BaselineConfig) != 0 {
+		return nil, fmt.Errorf("config minimization is not implemented for %v", cfg.Manager.TargetOS)
+	}
+	env := &env{
+		cfg:       cfg,
+		tracedir:  btcfg.TraceDir,
+		repo:      repo,
+		bisecter:  nil,
+		minimizer: minimizer,
+		inst:      inst,
+		startTime: time.Now(),
+	}
+	// env.log("starting bisection\n")
+	head, err := repo.HeadCommit()
+	if err != nil {
+		return nil, err
+	}
+	defer env.repo.SwitchCommit(head.Hash)
+	env.head = head
+	hostname, err := os.Hostname()
+	if err != nil {
+		hostname = "unnamed host"
+	}
+	env.log("%s starts single-test %s", hostname, env.startTime.String())
+	start := time.Now()
+	res, err := env.testSingle()
+	if env.flaky {
+		env.log("Reproducer flagged being flaky")
+	}
+	env.log("revisions tested: %v, total time: %v (build: %v, test: %v)",
+		env.numTests, time.Since(start), env.buildTime, env.testTime)
+	if err != nil {
+		env.log("error in: %v", err)
+		return res, err
+	}
+	return res, nil
+}
+
 func runImpl(cfg *Config, repo vcs.Repo, inst instance.Env) (*Result, error) {
+	// fmt.Printf("Bisecting: \n")
 	bisecter, ok := repo.(vcs.Bisecter)
 	if !ok {
 		return nil, fmt.Errorf("bisection is not implemented for %v", cfg.Manager.TargetOS)
@@ -146,6 +226,7 @@ func runImpl(cfg *Config, repo vcs.Repo, inst instance.Env) (*Result, error) {
 		inst:      inst,
 		startTime: time.Now(),
 	}
+	// env.log("starting bisection\n")
 	head, err := repo.HeadCommit()
 	if err != nil {
 		return nil, err
@@ -204,7 +285,55 @@ func runImpl(cfg *Config, repo vcs.Repo, inst instance.Env) (*Result, error) {
 	return res, nil
 }
 
+func (env *env) testSingle() (*testResult, error) {
+	env.log("Preparing single-test...")
+	if env == nil {
+		env.log("Env is nil...")
+		return nil, nil
+	}
+
+	env.log("Make clean for single-test...")
+	cfg := env.cfg
+	if err := build.Clean(cfg.Manager.TargetOS, cfg.Manager.TargetVMArch,
+		cfg.Manager.Type, cfg.Manager.KernelSrc); err != nil {
+		return nil, fmt.Errorf("kernel clean failed: %v", err)
+	}
+
+	env.log("building syzkaller on %v", cfg.Syzkaller.Commit)
+	if _, err := env.inst.BuildSyzkaller(cfg.Syzkaller.Repo, cfg.Syzkaller.Commit); err != nil {
+		return nil, err
+	}
+
+	var err error
+	cfg.Kernel.Commit, err = env.identifyRewrittenCommit()
+	if err != nil {
+		return nil, err
+	}
+	com, err := env.repo.SwitchCommit(cfg.Kernel.Commit)
+	if err != nil {
+		return nil, err
+	}
+
+	err = env.repo.ApplyPatch(cfg.Kernel.Commit)
+	if err != nil {
+		return nil, err
+	}
+
+	env.log("testing if issue is reproducible on commit %v\n", cfg.Kernel.Commit)
+	env.commit = com
+	env.kernelConfig = cfg.Kernel.Config
+	testRes, err := env.testWithTraces()
+	if err != nil {
+		return testRes, err
+	} else if testRes.verdict != vcs.BisectBad {
+		return testRes, fmt.Errorf("the crash wasn't reproduced on the original commit")
+	}
+
+	return testRes, nil
+}
+
 func (env *env) bisect() (*Result, error) {
+	// env.log("Preparing bisection...")
 	err := env.bisecter.PrepareBisect()
 	if err != nil {
 		return nil, err
@@ -460,28 +589,39 @@ type testResult struct {
 	kernelSign string
 }
 
+type TestResult struct {
+	Verdict    vcs.BisectResult
+	Com        *vcs.Commit
+	Rep        *report.Report
+	KernelSign string
+}
+
 func (env *env) build() (*vcs.Commit, string, error) {
 	current, err := env.repo.HeadCommit()
 	if err != nil {
 		return nil, "", err
 	}
 
-	bisectEnv, err := env.bisecter.EnvForCommit(
-		env.cfg.DefaultCompiler, env.cfg.CompilerType, env.cfg.BinDir, current.Hash, env.kernelConfig)
+	//bisectEnv, err := env.bisecter.EnvForCommit(
+	// 	env.cfg.DefaultCompiler, env.cfg.CompilerType, env.cfg.BinDir, current.Hash, env.kernelConfig)
 	if err != nil {
 		return current, "", err
 	}
 	env.log("testing commit %v %v", current.Hash, env.cfg.CompilerType)
+	// env.log("testing commit %v with compiler \"%v\"", current.Hash, env.cfg.BisectCompiler)
 	buildStart := time.Now()
 	mgr := env.cfg.Manager
 	if err := build.Clean(mgr.TargetOS, mgr.TargetVMArch, mgr.Type, mgr.KernelSrc); err != nil {
 		return current, "", fmt.Errorf("kernel clean failed: %v", err)
 	}
 	kern := &env.cfg.Kernel
-	_, imageDetails, err := env.inst.BuildKernel(bisectEnv.Compiler, env.cfg.Ccache, kern.Userspace,
-		kern.Cmdline, kern.Sysctl, bisectEnv.KernelConfig)
+	_, imageDetails, err := env.inst.BuildKernel(env.cfg.DefaultCompiler, env.cfg.Ccache, kern.Userspace,
+		kern.Cmdline, kern.Sysctl, env.kernelConfig)
+	env.log("kernel build time: %v", time.Since(buildStart))
 	if imageDetails.CompilerID != "" {
 		env.log("compiler: %v", imageDetails.CompilerID)
+	} else {
+		env.log("default compiler: %v", env.cfg.DefaultCompiler)
 	}
 	if imageDetails.Signature != "" {
 		env.log("kernel signature: %v", imageDetails.Signature)
@@ -497,7 +637,81 @@ func (env *env) test() (*testResult, error) {
 	if cfg.Timeout != 0 && time.Since(env.startTime) > cfg.Timeout {
 		return nil, fmt.Errorf("bisection is taking too long (>%v), aborting", cfg.Timeout)
 	}
+	env.log("Building env / kernel")
 	current, kernelSign, err := env.build()
+	res := &testResult{
+		verdict:    vcs.BisectSkip,
+		com:        current,
+		kernelSign: kernelSign,
+	}
+	if current == nil {
+		// This is not recoverable, as the caller must know which commit to skip.
+		return res, fmt.Errorf("couldn't get repo HEAD: %v", err)
+	}
+	if err != nil {
+		if verr, ok := err.(*osutil.VerboseError); ok {
+			env.log("%v", verr.Title)
+			env.saveDebugFile(current.Hash, 0, verr.Output)
+		} else if verr, ok := err.(*build.KernelError); ok {
+			env.log("%s", verr.Report)
+			env.saveDebugFile(current.Hash, 0, verr.Output)
+		} else {
+			env.log("%v", err)
+		}
+		return res, nil
+	}
+	env.log("env / kernel build done")
+
+	numTests := MaxNumTests / 2
+	if env.flaky || env.numTests == 0 {
+		// Use twice as many instances if the bug is flaky and during initial testing
+		// (as we don't know yet if it's flaky or not).
+		numTests *= 2
+	}
+	env.numTests++
+	testStart := time.Now()
+
+	env.log("Testing %v instances of the kernel.", numTests)
+	results, err := env.inst.Test(numTests, cfg.Repro.Syz, cfg.Repro.Opts, cfg.Repro.C)
+	env.log("testing done, time: %v", time.Since(testStart))
+	//for i, res := range results {
+	// env.log("Result for instance %v: %v", i, string(res.RawOutput[:]))
+	//}
+	env.testTime += time.Since(testStart)
+	if err != nil {
+		env.log("failed: %v", err)
+		return res, nil
+	}
+	bad, good, rep := env.processResults(current, results)
+	res.rep = rep
+	res.verdict = vcs.BisectSkip
+	if bad != 0 {
+		res.verdict = vcs.BisectBad
+		if !env.flaky && bad < good {
+			env.log("reproducer seems to be flaky")
+			env.flaky = true
+		}
+	} else if len(results)-good-bad > len(results)/3*2 {
+		// More than 2/3 of instances failed with infrastructure error,
+		// can't reliably tell that the commit is good.
+		res.verdict = vcs.BisectSkip
+	} else if good != 0 {
+		res.verdict = vcs.BisectGood
+	}
+	return res, nil
+}
+
+// Note: When this function returns an error, the bisection it was called from is aborted.
+// Hence recoverable errors must be handled and the callers must treat testResult with care.
+func (env *env) testWithTraces() (*testResult, error) {
+	fmt.Printf("testWithTraces\n")
+	cfg := env.cfg
+	if cfg.Timeout != 0 && time.Since(env.startTime) > cfg.Timeout {
+		return nil, fmt.Errorf("bisection is taking too long (>%v), aborting", cfg.Timeout)
+	}
+	env.log("Building env / kernel")
+	current, kernelSign, err := env.build()
+	env.log("env / kernel build done")
 	res := &testResult{
 		verdict:    vcs.BisectSkip,
 		com:        current,
@@ -527,16 +741,20 @@ func (env *env) test() (*testResult, error) {
 		numTests *= 2
 	}
 	env.numTests++
-
 	testStart := time.Now()
 
-	results, err := env.inst.Test(numTests, cfg.Repro.Syz, cfg.Repro.Opts, cfg.Repro.C)
+	env.log("Testing %v instances of the kernel.", numTests)
+	results, err := env.inst.TestWithTraces(numTests, cfg.Repro.Syz, cfg.Repro.Opts, cfg.Repro.C)
+	env.log("testing done, time: %v", time.Since(testStart))
+	//for i, res := range results {
+	// env.log("Result for instance %v: %v", i, string(res.RawOutput[:]))
+	//}
 	env.testTime += time.Since(testStart)
 	if err != nil {
 		env.log("failed: %v", err)
 		return res, nil
 	}
-	bad, good, rep := env.processResults(current, results)
+	bad, good, rep := env.processResultsWithTraces(current, results)
 	res.rep = rep
 	res.verdict = vcs.BisectSkip
 	if bad != 0 {
@@ -557,8 +775,12 @@ func (env *env) test() (*testResult, error) {
 
 func (env *env) processResults(current *vcs.Commit, results []instance.EnvTestResult) (
 	bad, good int, rep *report.Report) {
+	fmt.Printf("Results for commit %v: \n", current.Hash)
+
 	var verdicts []string
 	for i, res := range results {
+		// print string(res.RawOutput[:])
+		// fmt.Printf("result number %v output %v\n and Error %v", i, string(res.RawOutput[:]), res.Error)
 		if res.Error == nil {
 			good++
 			verdicts = append(verdicts, "OK")
@@ -579,6 +801,116 @@ func (env *env) processResults(current *vcs.Commit, results []instance.EnvTestRe
 		case *instance.CrashError:
 			bad++
 			rep = err.Report
+			verdicts = append(verdicts, fmt.Sprintf("crashed: %v", err))
+			output := err.Report.Report
+			if len(output) == 0 {
+				output = err.Report.Output
+			}
+			env.saveDebugFile(current.Hash, i, output)
+		default:
+			verdicts = append(verdicts, fmt.Sprintf("failed: %v", err))
+		}
+	}
+	unique := make(map[string]bool)
+	for _, verdict := range verdicts {
+		unique[verdict] = true
+	}
+	if len(unique) == 1 {
+		env.log("all runs: %v", verdicts[0])
+	} else {
+		for i, verdict := range verdicts {
+			env.log("run #%v: %v", i, verdict)
+		}
+	}
+	return
+}
+
+func (env *env) processResultsWithTraces(current *vcs.Commit, results []instance.EnvTestResultWithTraces) (
+	bad, good int, rep *report.Report) {
+	fmt.Printf("Results for commit %v with traces (%d results): \n", current.Hash, len(results))
+
+	var verdicts []string
+	for i, res := range results {
+		// fmt.Printf("result number %v output %v\n and Error %v", i, string(res.RawOutput[:]), res.Error)
+		if res.Error == nil {
+			good++
+			verdicts = append(verdicts, "OK")
+			f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/ok_%v.txt", i))
+			if err1 != nil {
+				panic(err1)
+			}
+			f.WriteString(fmt.Sprintf("OK\n"))
+
+			continue
+		}
+		switch err := res.Error.(type) {
+		case *instance.TestError:
+			if err.Boot {
+				verdicts = append(verdicts, fmt.Sprintf("boot failed: %v", err))
+			} else {
+				verdicts = append(verdicts, fmt.Sprintf("basic kernel testing failed: %v", err))
+			}
+			output := err.Output
+			if err.Report != nil {
+				output = err.Report.Output
+			}
+			env.saveDebugFile(current.Hash, i, output)
+			f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/invalid_%v.csv", i))
+			if err1 != nil {
+				panic(err1)
+			}
+			/*
+				type TestError struct {
+					Boot   bool // says if the error happened during booting or during instance testing
+					Title  string
+					Output []byte
+					Report *report.Report
+				}*/
+			f.WriteString(fmt.Sprintf("%s,%v\n%s\n", err.Title, err.Boot, string(output)))
+
+		case *instance.CrashError:
+			bad++
+			rep = err.Report
+
+			for traceIndex, trace := range *err.Report.Traces {
+				frames := trace.Frames
+				if frames == nil {
+					fmt.Printf("Error: frames == nil, skipping \n")
+				} else {
+					// fmt.Printf("Writing frames to file in %s\n", env.tracedir)
+					f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/trace_%v_%v.csv", i, traceIndex))
+					if err1 != nil {
+						panic(err1)
+					}
+					defer f.Close()
+					for _, frame := range *frames {
+						f.WriteString(fmt.Sprintf("%s,%s,%d,%v\n", frame.File, frame.Func, frame.Line, frame.Inline))
+					}
+				}
+				crashFrames := (*err.Report.Traces)[0].CrashFrames
+				if crashFrames == nil {
+					fmt.Printf("Error: crashFrames == nil, skipping \n")
+				} else {
+					// fmt.Printf("Writing crashframes to file in %s\n", env.tracedir)
+					f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/crashtrace_%v_%v.csv", i, traceIndex))
+					if err1 != nil {
+						panic(err1)
+					}
+					defer f.Close()
+					for _, frame := range *crashFrames {
+						f.WriteString(fmt.Sprintf("%s,%s,%d,%v\n", frame.File, frame.Func, frame.Line, frame.Inline))
+					}
+				}
+
+				// fmt.Printf("Writing title, type and alttitles to file\n")
+				f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/crash_info_%v_%v.csv", i, traceIndex))
+				if err1 != nil {
+					panic(err1)
+				}
+				defer f.Close()
+				f.WriteString(fmt.Sprintf("%s\n%s\n%s\n", err.Report.Title, err.Report.Type, err.Report.AltTitles))
+			}
+
 			verdicts = append(verdicts, fmt.Sprintf("crashed: %v", err))
 			output := err.Report.Report
 			if len(output) == 0 {

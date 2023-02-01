@@ -15,7 +15,7 @@ func Fuzz(data []byte) int {
 	for os, reporter := range fuzzReporters {
 		typ := reporter.typ
 		containsCrash := reporter.ContainsCrash(data)
-		rep := reporter.Parse(data)
+		rep := reporter.Parse(data, 0)
 		if containsCrash != (rep != nil) {
 			panic(fmt.Sprintf("%v: ContainsCrash and Parse disagree", typ))
 		}
@@ -50,7 +50,7 @@ func Fuzz(data []byte) int {
 				typ, rep.SkipPos, rep.StartPos, rep.EndPos))
 		}
 		// If we parse from StartPos, we must find the same report.
-		rep1 := reporter.ParseFrom(data, rep.StartPos)
+		rep1 := reporter.ParseFrom(data, rep.StartPos, 0)
 		if rep1 == nil || rep1.Title != rep.Title || rep1.StartPos != rep.StartPos {
 			title, startPos := "", -1
 			if rep1 != nil {

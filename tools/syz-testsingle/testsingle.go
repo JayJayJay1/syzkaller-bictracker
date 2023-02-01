@@ -1,21 +1,3 @@
-// Copyright 2018 syzkaller project authors. All rights reserved.
-// Use of this source code is governed by Apache 2 LICENSE that can be found in the LICENSE file.
-
-// syz-bisect runs bisection to find cause/fix commit for a crash.
-//
-// The tool is originally created to test pkg/bisect logic.
-//
-// The tool requires a config file passed in -config flag, see Config type below for details,
-// and a directory with info about the crash passed in -crash flag).
-// If -fix flag is specified, it does fix bisection. Otherwise it does cause bisection. Also
-// wanted syzkaller and kernel commits can be specified using -syzkaller_commit and
-// -kernel_commit. HEAD is used if commits are not specified.
-//
-// The crash dir should contain the following files:
-//  - repro.cprog or repro.prog: reproducer for the crash
-//  - repro.opts: syzkaller reproducer options (e.g. {"procs":1,"sandbox":"none",...}) (optional)
-//
-// The tool stores bisection result into cause.commit or fix.commit.
 package main
 
 import (
@@ -37,6 +19,7 @@ import (
 var (
 	flagConfig            = flag.String("config", "", "bisect config file")
 	flagCrash             = flag.String("crash", "", "dir with crash info")
+	flagTrace             = flag.String("tracedir", "", "dir to place traces in")
 	flagFix               = flag.Bool("fix", false, "search for crash fix")
 	flagKernelCommit      = flag.String("kernel_commit", "", "original kernel commit")
 	flagKernelCommitTitle = flag.String("kernel_commit_title", "", "original kernel commit title")
@@ -87,8 +70,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	// fmt.Printf("Setting workdir\n")
 	if mgrcfg.Workdir == "" {
+		fmt.Printf("Creating new temp workdir as none is given...\n")
 		mgrcfg.Workdir, err = ioutil.TempDir("", "syz-bisect")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to create temp dir: %v\n", err)
@@ -96,31 +79,35 @@ func main() {
 		}
 		defer os.RemoveAll(mgrcfg.Workdir)
 	}
-	cfg := &bisect.Config{
-		Trace: &debugtracer.GenericTracer{
-			TraceWriter: os.Stdout,
-			OutDir:      *flagCrash,
+	btcfg := &bisect.BicTrackerConfig{
+		Config: &bisect.Config{
+			Trace: &debugtracer.GenericTracer{
+				TraceWriter: os.Stdout,
+				OutDir:      *flagCrash,
+			},
+			Fix:             *flagFix,
+			DefaultCompiler: mycfg.Compiler,
+			CompilerType:    mycfg.CompilerType,
+			BinDir:          mycfg.BinDir,
+			Ccache:          mycfg.Ccache,
+			Kernel: bisect.KernelConfig{
+				Repo:        mycfg.KernelRepo,
+				Branch:      mycfg.KernelBranch,
+				Commit:      *flagKernelCommit,
+				CommitTitle: *flagKernelCommitTitle,
+				Userspace:   mycfg.Userspace,
+				Sysctl:      mycfg.Sysctl,
+				Cmdline:     mycfg.Cmdline,
+			},
+			Syzkaller: bisect.SyzkallerConfig{
+				Repo:   mycfg.SyzkallerRepo,
+				Commit: *flagSyzkallerCommit,
+			},
+			Manager: mgrcfg,
 		},
-		Fix:             *flagFix,
-		DefaultCompiler: mycfg.Compiler,
-		CompilerType:    mycfg.CompilerType,
-		BinDir:          mycfg.BinDir,
-		Ccache:          mycfg.Ccache,
-		Kernel: bisect.KernelConfig{
-			Repo:        mycfg.KernelRepo,
-			Branch:      mycfg.KernelBranch,
-			Commit:      *flagKernelCommit,
-			CommitTitle: *flagKernelCommitTitle,
-			Userspace:   mycfg.Userspace,
-			Sysctl:      mycfg.Sysctl,
-			Cmdline:     mycfg.Cmdline,
-		},
-		Syzkaller: bisect.SyzkallerConfig{
-			Repo:   mycfg.SyzkallerRepo,
-			Commit: *flagSyzkallerCommit,
-		},
-		Manager: mgrcfg,
+		TraceDir: *flagTrace,
 	}
+	cfg := btcfg.Config
 	loadFile("", mycfg.KernelConfig, &cfg.Kernel.Config, true)
 	loadFile("", mycfg.KernelBaselineConfig, &cfg.Kernel.BaselineConfig, false)
 	loadFile(*flagCrash, "repro.prog", &cfg.Repro.Syz, false)
@@ -139,13 +126,23 @@ func main() {
 		cfg.Kernel.Commit = vcs.HEAD
 	}
 	// fmt.Print("String pkg/bisect loaded.")
-	result, err := bisect.Run(cfg)
+	result, err := bisect.RunSingle(btcfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "bisection failed: %v\n", err)
-		os.Exit(1)
+		fmt.Fprintf(os.Stderr, "testing single failed: %v\n", err)
 	}
 
-	saveResultCommits(result.Commits)
+	if result != nil {
+		if result.Verdict == vcs.BisectBad {
+			fmt.Printf("§Veridct is bad§\n")
+		} else if result.Verdict == vcs.BisectGood {
+			fmt.Printf("§Veridct is good§\n")
+		} else {
+			fmt.Printf("§Veridct is skip§\n")
+		}
+		// fmt.Printf("Report: %+v\n\n\n", result.Rep.Output)
+	} else {
+		fmt.Printf("§Verdict is missing§\n")
+	}
 }
 
 func loadFile(path, file string, dst *[]byte, mandatory bool) {

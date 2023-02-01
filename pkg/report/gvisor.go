@@ -40,7 +40,7 @@ func (ctx *gvisor) ContainsCrash(output []byte) bool {
 	return containsCrash(output, gvisorOopses, ctx.ignores)
 }
 
-func (ctx *gvisor) Parse(output []byte) *Report {
+func (ctx *gvisor) Parse(output []byte, instance int) *Report {
 	rep := simpleLineParser(output, gvisorOopses, nil, ctx.ignores)
 	if rep == nil {
 		return nil

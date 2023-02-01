@@ -135,6 +135,7 @@ func gitReleaseTagToInt(tag string, includeRC bool) uint64 {
 func (ctx *linux) EnvForCommit(
 	defaultCompiler, compilerType, binDir, commit string, kernelConfig []byte,
 ) (*BisectEnv, error) {
+	// fmt.Printf("Preparing environment for commit %v with compiler \"%v\"\n", commit, bisectCompiler)
 	tagList, err := ctx.previousReleaseTags(commit, true, false, false)
 	if err != nil {
 		return nil, err

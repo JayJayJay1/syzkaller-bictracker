@@ -46,6 +46,7 @@ func main() {
 	)
 	defer tool.Init()()
 
+	fmt.Printf("Starting syz-cover\n")
 	if len(flag.Args()) == 0 {
 		fmt.Fprintf(os.Stderr, "usage: syz-cover [flags] rawcover.file\n")
 		flag.PrintDefaults()
@@ -64,10 +65,12 @@ func main() {
 	if target == nil {
 		tool.Failf("unknown target %v/%v", *flagOS, *flagArch)
 	}
+	fmt.Printf("Reading PCs\n")
 	pcs, err := readPCs(flag.Args())
 	if err != nil {
 		tool.Fail(err)
 	}
+	fmt.Printf("Making Report\n")
 	rg, err := cover.MakeReportGenerator(target, *flagVM, *flagKernelObj,
 		*flagKernelSrc, *flagKernelBuildSrc, nil, nil, nil, false)
 	if err != nil {
@@ -93,15 +96,10 @@ func main() {
 		}
 		return
 	}
-	fn, err := osutil.TempFile("syz-cover")
-	if err != nil {
+	if err := osutil.WriteFile("coverage/coverage.html", buf.Bytes()); err != nil {
 		tool.Fail(err)
 	}
-	fn += ".html"
-	if err := osutil.WriteFile(fn, buf.Bytes()); err != nil {
-		tool.Fail(err)
-	}
-	if err := exec.Command("xdg-open", fn).Start(); err != nil {
+	if err := exec.Command("python3", "-m http.server --directory coverage").Start(); err != nil {
 		tool.Failf("failed to start browser: %v", err)
 	}
 }

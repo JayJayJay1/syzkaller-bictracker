@@ -12,7 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
+
+	// "strings"
 	"time"
 
 	"github.com/google/syzkaller/pkg/build"
@@ -31,6 +32,7 @@ type Env interface {
 	BuildSyzkaller(string, string) (string, error)
 	BuildKernel(string, string, string, string, string, []byte) (string, build.ImageDetails, error)
 	Test(numVMs int, reproSyz, reproOpts, reproC []byte) ([]EnvTestResult, error)
+	TestWithTraces(numVMs int, reproSyz, reproOpts, reproC []byte) ([]EnvTestResultWithTraces, error)
 }
 
 type env struct {
@@ -63,10 +65,11 @@ func NewEnv(cfg *mgrconfig.Config) (Env, error) {
 
 func (env *env) BuildSyzkaller(repoURL, commit string) (string, error) {
 	cfg := env.cfg
-	srcIndex := strings.LastIndex(cfg.Syzkaller, "/src/")
-	if srcIndex == -1 {
-		return "", fmt.Errorf("syzkaller path %q is not in GOPATH", cfg.Syzkaller)
-	}
+	// srcIndex := strings.LastIndex(cfg.Syzkaller, "/src/")
+	//if srcIndex == -1 {
+	//	return "", fmt.Errorf("syzkaller path %q is not in GOPATH", cfg.Syzkaller)
+	//}
+	// fmt.Printf("Building syzkaller \"%v\" \n", cfg.Syzkaller)
 	repo := vcs.NewSyzkallerRepo(cfg.Syzkaller)
 	if _, err := repo.CheckoutCommit(repoURL, commit); err != nil {
 		return "", fmt.Errorf("failed to checkout syzkaller repo: %v", err)
@@ -82,7 +85,7 @@ func (env *env) BuildSyzkaller(repoURL, commit string) (string, error) {
 	cmd := osutil.Command(MakeBin, "target")
 	cmd.Dir = cfg.Syzkaller
 	goEnvOptions := []string{
-		"GOPATH=" + cfg.Syzkaller[:srcIndex],
+		//"GOPATH=" + cfg.Syzkaller[:srcIndex],
 		"GO111MODULE=auto",
 	}
 	cmd.Env = append(append([]string{}, os.Environ()...), goEnvOptions...)
@@ -130,7 +133,9 @@ func (env *env) BuildKernel(compilerBin, ccacheBin, userspaceDir, cmdlineFile, s
 		SysctlFile:   sysctlFile,
 		Config:       kernelConfig,
 	}
+	fmt.Printf("§1 Building build.Image in dir \"%v\" \n", params.KernelDir)
 	details, err := build.Image(params)
+	fmt.Printf("§2 build.Image done \"%v\" \n", params.KernelDir)
 	if err != nil {
 		return "", details, err
 	}
@@ -249,6 +254,43 @@ func (env *env) Test(numVMs int, reproSyz, reproOpts, reproC []byte) ([]EnvTestR
 	return ret, nil
 }
 
+func (env *env) TestWithTraces(numVMs int, reproSyz, reproOpts, reproC []byte) ([]EnvTestResultWithTraces, error) {
+	fmt.Printf("§1 env.TestWithTraces \n")
+	if err := mgrconfig.Complete(env.cfg); err != nil {
+		return nil, err
+	}
+	reporter, err := report.NewReporter(env.cfg)
+	if err != nil {
+		return nil, err
+	}
+	vmPool, err := vm.Create(env.cfg, false)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VM pool: %v", err)
+	}
+	if n := vmPool.Count(); numVMs > n {
+		numVMs = n
+	}
+	res := make(chan EnvTestResultWithTraces, numVMs)
+	for i := 0; i < numVMs; i++ {
+		inst := &inst{
+			cfg:           env.cfg,
+			optionalFlags: env.optionalFlags,
+			reporter:      reporter,
+			vmPool:        vmPool,
+			vmIndex:       i,
+			reproSyz:      reproSyz,
+			reproOpts:     reproOpts,
+			reproC:        reproC,
+		}
+		go func() { res <- inst.testWithTraces() }()
+	}
+	var ret []EnvTestResultWithTraces
+	for i := 0; i < numVMs; i++ {
+		ret = append(ret, <-res)
+	}
+	return ret, nil
+}
+
 type inst struct {
 	cfg           *mgrconfig.Config
 	optionalFlags bool
@@ -266,23 +308,30 @@ type EnvTestResult struct {
 	RawOutput []byte
 }
 
-func (inst *inst) test() EnvTestResult {
+type EnvTestResultWithTraces struct {
+	Error     error
+	RawOutput []byte
+	Traces    *[]report.Trace
+}
+
+func (inst *inst) testWithTraces() EnvTestResultWithTraces {
 	vmInst, err := inst.vmPool.Create(inst.vmIndex)
 	if err != nil {
 		testErr := &TestError{
 			Boot:  true,
 			Title: err.Error(),
 		}
-		ret := EnvTestResult{
+		ret := EnvTestResultWithTraces{
 			Error: testErr,
 		}
 		if bootErr, ok := err.(vm.BootErrorer); ok {
+			fmt.Printf("boot error: %v", bootErr)
 			testErr.Title, testErr.Output = bootErr.BootError()
 			ret.RawOutput = testErr.Output
-			rep := inst.reporter.Parse(testErr.Output)
+			rep := inst.reporter.Parse(testErr.Output, inst.vmIndex)
 			if rep != nil && rep.Type == report.UnexpectedReboot {
 				// Avoid detecting any boot crash as "unexpected kernel reboot".
-				rep = inst.reporter.ParseFrom(testErr.Output, rep.SkipPos)
+				rep = inst.reporter.ParseFrom(testErr.Output, rep.SkipPos, inst.vmIndex)
 			}
 			if rep == nil {
 				rep = &report.Report{
@@ -297,6 +346,54 @@ func (inst *inst) test() EnvTestResult {
 			testErr.Report = rep
 			testErr.Title = rep.Title
 		}
+		fmt.Printf("failed to create VM: %v, returning ret\n", err)
+		return ret
+	}
+	defer vmInst.Close()
+	inst.vm = vmInst
+	ret := EnvTestResultWithTraces{}
+	if ret.Error = inst.testInstance(); ret.Error != nil {
+		return ret
+	}
+	if len(inst.reproSyz) != 0 || len(inst.reproC) != 0 {
+		ret.RawOutput, ret.Error, ret.Traces = inst.testReproAndCollectTraces()
+	}
+	return ret
+}
+
+func (inst *inst) test() EnvTestResult {
+	vmInst, err := inst.vmPool.Create(inst.vmIndex)
+	if err != nil {
+		testErr := &TestError{
+			Boot:  true,
+			Title: err.Error(),
+		}
+		ret := EnvTestResult{
+			Error: testErr,
+		}
+		if bootErr, ok := err.(vm.BootErrorer); ok {
+			fmt.Printf("boot error: %v", bootErr)
+			testErr.Title, testErr.Output = bootErr.BootError()
+			ret.RawOutput = testErr.Output
+			rep := inst.reporter.Parse(testErr.Output, inst.vmIndex)
+			if rep != nil && rep.Type == report.UnexpectedReboot {
+				// Avoid detecting any boot crash as "unexpected kernel reboot".
+				rep = inst.reporter.ParseFrom(testErr.Output, rep.SkipPos, inst.vmIndex)
+			}
+			if rep == nil {
+				rep = &report.Report{
+					Title:  testErr.Title,
+					Output: testErr.Output,
+				}
+			}
+			if err := inst.reporter.Symbolize(rep); err != nil {
+				// TODO(dvyukov): send such errors to dashboard.
+				log.Logf(0, "failed to symbolize report: %v", err)
+			}
+			testErr.Report = rep
+			testErr.Title = rep.Title
+		}
+		fmt.Printf("failed to create VM: %v, returning ret", err)
 		return ret
 	}
 	defer vmInst.Close()
@@ -315,6 +412,7 @@ func (inst *inst) test() EnvTestResult {
 // (that we can copy binaries, run binaries, they can connect to host, run syzkaller programs, etc).
 // TestError is returned if there is a problem with the kernel (e.g. crash).
 func (inst *inst) testInstance() error {
+	// fmt.Printf("starting instance test...\n")
 	ln, err := net.Listen("tcp", ":")
 	if err != nil {
 		return fmt.Errorf("failed to open listening socket: %v", err)
@@ -405,16 +503,66 @@ func (inst *inst) testRepro() ([]byte, error) {
 			opts.Sandbox = "none"
 		}
 		opts.Repeat, opts.Threaded = true, true
+		// fmt.Printf("reproducing crash with syz-executor (opts: %+v)...\n", opts)
 		out, err = transformError(execProg.RunSyzProg(inst.reproSyz,
 			inst.cfg.Timeouts.NoOutputRunningTime, opts))
 	}
 	if err == nil && len(inst.reproC) > 0 {
 		// We should test for more than full "no output" timeout, but the problem is that C reproducers
 		// don't print anything, so we will get a false "no output" crash.
+		// fmt.Printf("reproducing crash with C reproducer...\n")
 		out, err = transformError(execProg.RunCProgRaw(inst.reproC, inst.cfg.Target,
 			inst.cfg.Timeouts.NoOutput/2))
 	}
 	return out, err
+}
+
+func (inst *inst) testReproAndCollectTraces() ([]byte, error, *[]report.Trace) {
+	var err error
+	execProg, err := SetupExecProg(inst.vm, inst.cfg, inst.reporter, &OptionalConfig{
+		OldFlagsCompatMode: !inst.optionalFlags,
+	})
+	if err != nil {
+		return nil, err, nil
+	}
+	transformError := func(res *RunResult, err error) ([]byte, error, *[]report.Trace) {
+		if err != nil {
+			return nil, err, nil
+		}
+		if res != nil && res.Report != nil {
+			return res.RawOutput, &CrashError{Report: res.Report}, res.Report.Traces
+		}
+		fmt.Printf("res.Report is nil")
+		return res.RawOutput, nil, nil
+	}
+	out := []byte{}
+	var traces *[]report.Trace
+	if len(inst.reproSyz) > 0 {
+		var opts csource.Options
+		opts, err = csource.DeserializeOptions(inst.reproOpts)
+		if err != nil {
+			return nil, err, nil
+		}
+		// Combine repro options and default options in a way that increases chances to reproduce the crash.
+		// First, we always enable threaded/collide as it should be [almost] strictly better.
+		// Executor does not support empty sandbox, so we use none instead.
+		// Finally, always use repeat and multiple procs.
+		if opts.Sandbox == "" {
+			opts.Sandbox = "none"
+		}
+		opts.Repeat, opts.Threaded = true, true
+		fmt.Printf("reproducing crash with syz-executor (opts: %+v)...\n", opts)
+		out, err, traces = transformError(execProg.RunSyzProg(inst.reproSyz,
+			inst.cfg.Timeouts.NoOutputRunningTime, opts))
+	}
+	if err == nil && len(inst.reproC) > 0 {
+		// We should test for more than full "no output" timeout, but the problem is that C reproducers
+		// don't print anything, so we will get a false "no output" crash.
+		fmt.Printf("reproducing crash with C reproducer...\n")
+		out, err, traces = transformError(execProg.RunCProgRaw(inst.reproC, inst.cfg.Target,
+			inst.cfg.Timeouts.NoOutput/2))
+	}
+	return out, err, traces
 }
 
 type OptionalFuzzerArgs struct {
@@ -465,10 +613,13 @@ func FuzzerCmd(args *FuzzerCmdArgs) string {
 		}
 		optionalArg = " " + tool.OptionalFlags(flags)
 	}
-	return fmt.Sprintf("%v -executor=%v -name=%v -arch=%v%v -manager=%v -sandbox=%v"+
-		" -procs=%v -cover=%v -debug=%v -test=%v%v%v%v",
+	cmd := fmt.Sprintf("%v -executor=%v -name=%v -arch=%v%v -manager=%v -sandbox=%v"+
+		" -procs=%v -cover=1 -debug=%v -test=%v%v%v%v",
 		args.Fuzzer, args.Executor, args.Name, args.Arch, osArg, args.FwdAddr, args.Sandbox,
-		args.Procs, args.Cover, args.Debug, args.Test, runtestArg, verbosityArg, optionalArg)
+		args.Procs, args.Debug, args.Test, runtestArg, verbosityArg, optionalArg)
+
+	// .fmt.Printf("fuzzer cmd: %v\n", cmd)
+	return cmd
 }
 
 func OldFuzzerCmd(fuzzer, executor, name, OS, arch, fwdAddr, sandbox string, sandboxArg, procs int,
@@ -507,11 +658,13 @@ func ExecprogCmd(execprog, executor, OS, arch, sandbox string, sandboxArg int, r
 		})
 	}
 
-	return fmt.Sprintf("%v -executor=%v -arch=%v%v -sandbox=%v"+
-		" -procs=%v -repeat=%v -threaded=%v -collide=%v -cover=0%v %v",
+	cmd := fmt.Sprintf("%v -executor=%v -arch=%v%v -sandbox=%v"+
+		" -procs=%v -repeat=%v -threaded=%v -collide=%v -cover %v %v",
 		execprog, executor, arch, osArg, sandbox,
 		procs, repeatCount, threaded, collide,
 		optionalArg, progFile)
+	// fmt.Printf("execprog cmd: %v", cmd)
+	return cmd
 }
 
 var MakeBin = func() string {

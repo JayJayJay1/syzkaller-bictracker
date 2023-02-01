@@ -499,6 +499,7 @@ func (inst *instance) boot() error {
 	}
 	inst.args = args
 	qemu := osutil.Command(inst.cfg.Qemu, args...)
+	// fmt.Printf("Running qemu!\n")
 	qemu.Stdout = inst.wpipe
 	qemu.Stderr = inst.wpipe
 	if err := qemu.Start(); err != nil {
@@ -531,6 +532,7 @@ func (inst *instance) boot() error {
 			}
 		}
 	}()
+	// fmt.Printf("Waiting for ssh with port %v, sshuser %v, sshkey %v", inst.port, inst.sshuser, inst.sshkey)
 	if err := vmimpl.WaitForSSH(inst.debug, 10*time.Minute*inst.timeouts.Scale, "localhost",
 		inst.sshkey, inst.sshuser, inst.os, inst.port, inst.merger.Err); err != nil {
 		bootOutputStop <- true

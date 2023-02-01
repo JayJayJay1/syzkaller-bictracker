@@ -18,7 +18,7 @@ func (ctx *stub) ContainsCrash(output []byte) bool {
 	panic("not implemented")
 }
 
-func (ctx *stub) Parse(output []byte) *Report {
+func (ctx *stub) Parse(output []byte, instance int) *Report {
 	panic("not implemented")
 }
 

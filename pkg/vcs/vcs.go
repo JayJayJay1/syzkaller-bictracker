@@ -61,6 +61,8 @@ type Repo interface {
 	// Remote is not fetched and only commits reachable from the checked out HEAD are searched
 	// (e.g. do CheckoutBranch before).
 	Contains(commit string) (bool, error)
+
+	ApplyPatch(commit string) error
 }
 
 // Bisecter may be optionally implemented by Repo.

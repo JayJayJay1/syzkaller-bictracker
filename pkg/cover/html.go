@@ -25,6 +25,7 @@ import (
 )
 
 func fixUpPCs(target string, progs []Prog, coverFilter map[uint32]uint32) []Prog {
+	fmt.Printf("Fixing up PCs\n")
 	if coverFilter != nil {
 		for i, prog := range progs {
 			var nPCs []uint64
@@ -58,7 +59,9 @@ func fixUpPCs(target string, progs []Prog, coverFilter map[uint32]uint32) []Prog
 }
 
 func (rg *ReportGenerator) DoHTML(w io.Writer, progs []Prog, coverFilter map[uint32]uint32) error {
+	fmt.Printf("Fixing up PCs for HTML\n")
 	progs = fixUpPCs(rg.target.Arch, progs, coverFilter)
+	fmt.Printf("Preparing FileMap HTML\n")
 	files, err := rg.prepareFileMap(progs)
 	if err != nil {
 		return err

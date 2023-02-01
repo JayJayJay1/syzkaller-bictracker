@@ -49,7 +49,7 @@ func (ctx *bsd) ContainsCrash(output []byte) bool {
 	return containsCrash(output, ctx.oopses, ctx.ignores)
 }
 
-func (ctx *bsd) Parse(output []byte) *Report {
+func (ctx *bsd) Parse(output []byte, instance int) *Report {
 	return simpleLineParser(output, ctx.oopses, nil, ctx.ignores)
 }
 

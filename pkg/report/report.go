@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/google/syzkaller/pkg/mgrconfig"
+	"github.com/google/syzkaller/pkg/symbolizer"
 	"github.com/google/syzkaller/pkg/vcs"
 	"github.com/google/syzkaller/sys/targets"
 )
@@ -23,7 +24,7 @@ type reporterImpl interface {
 
 	// Parse extracts information about oops from console output.
 	// Returns nil if no oops found.
-	Parse(output []byte) *Report
+	Parse(output []byte, instance int) *Report
 
 	// Symbolize symbolizes rep.Report and fills in Maintainers.
 	Symbolize(rep *Report) error
@@ -68,7 +69,19 @@ type Report struct {
 	// reportPrefixLen is length of additional prefix lines that we added before actual crash report.
 	reportPrefixLen int
 	// symbolized is set if the report is symbolized.
-	symbolized bool
+	Symbolized bool
+
+	Traces *[]Trace
+}
+
+type Trace struct {
+	Thread         int
+	MaxNumMessages int
+	Messages       *[]string
+	Counter        *int
+	Pcs            *[]uint64
+	Frames         *[]symbolizer.Frame
+	CrashFrames    *[]symbolizer.Frame
 }
 
 type Type int
@@ -100,6 +113,7 @@ func (t Type) String() string {
 
 // NewReporter creates reporter for the specified OS/Type.
 func NewReporter(cfg *mgrconfig.Config) (*Reporter, error) {
+	// fmt.Printf("NewReporter with cfg: %+v\n", cfg)
 	typ := cfg.TargetOS
 	if cfg.Type == "gvisor" {
 		typ = cfg.Type
@@ -181,12 +195,12 @@ func compileRegexps(list []string) ([]*regexp.Regexp, error) {
 	return compiled, nil
 }
 
-func (reporter *Reporter) Parse(output []byte) *Report {
-	return reporter.ParseFrom(output, 0)
+func (reporter *Reporter) Parse(output []byte, instance int) *Report {
+	return reporter.ParseFrom(output, 0, instance)
 }
 
-func (reporter *Reporter) ParseFrom(output []byte, minReportPos int) *Report {
-	rep := reporter.impl.Parse(output[minReportPos:])
+func (reporter *Reporter) ParseFrom(output []byte, minReportPos int, instance int) *Report {
+	rep := reporter.impl.Parse(output[minReportPos:], instance)
 	if rep == nil {
 		return nil
 	}
@@ -222,10 +236,10 @@ func (reporter *Reporter) ContainsCrash(output []byte) bool {
 }
 
 func (reporter *Reporter) Symbolize(rep *Report) error {
-	if rep.symbolized {
+	if rep.Symbolized {
 		panic("Symbolize is called twice")
 	}
-	rep.symbolized = true
+	rep.Symbolized = true
 	if err := reporter.impl.Symbolize(rep); err != nil {
 		return err
 	}
@@ -287,7 +301,7 @@ func IsSuppressed(reporter *Reporter, output []byte) bool {
 func ParseAll(reporter *Reporter, output []byte) (reports []*Report) {
 	skipPos := 0
 	for {
-		rep := reporter.ParseFrom(output, skipPos)
+		rep := reporter.ParseFrom(output, skipPos, 0)
 		if rep == nil {
 			return
 		}
