@@ -435,7 +435,6 @@ func (inst *inst) testInstance() error {
 	if err != nil {
 		return &TestError{Title: fmt.Sprintf("failed to copy test binary to VM: %v", err)}
 	}
-	fmt.Printf("Fuzzer bin copied to VM\n")
 
 	// If ExecutorBin is provided, it means that syz-executor is already in the image,
 	// so no need to copy it.
@@ -449,9 +448,7 @@ func (inst *inst) testInstance() error {
 	}
 
 	cmd := OldFuzzerCmd(fuzzerBin, executorBin, targets.TestOS, inst.cfg.TargetOS, inst.cfg.TargetArch, fwdAddr,
-		inst.cfg.Sandbox, inst.cfg.SandboxArg, 0, false, true, inst.optionalFlags, inst.cfg.Timeouts.Slowdown)
-
-	fmt.Printf("Running cmd (cover should be null): %v\n", cmd)
+		inst.cfg.Sandbox, inst.cfg.SandboxArg, 0, inst.cfg.Cover, true, inst.optionalFlags, inst.cfg.Timeouts.Slowdown)
 
 	outc, errc, err := inst.vm.Run(10*time.Minute*inst.cfg.Timeouts.Scale, nil, cmd)
 	if err != nil {

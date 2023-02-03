@@ -168,6 +168,7 @@ func RunSingle(btcfg *BicTrackerConfig) (*TestResult, error) {
 
 func runImplSingle(btcfg *BicTrackerConfig, repo vcs.Repo, inst instance.Env) (*testResult, error) {
 	fmt.Printf("Starting single test: \n")
+	bisecter, ok := repo.(vcs.Bisecter)
 	cfg := btcfg.Config
 	minimizer, ok := repo.(vcs.ConfigMinimizer)
 	if !ok && len(cfg.Kernel.BaselineConfig) != 0 {
@@ -177,7 +178,7 @@ func runImplSingle(btcfg *BicTrackerConfig, repo vcs.Repo, inst instance.Env) (*
 		cfg:       cfg,
 		tracedir:  btcfg.TraceDir,
 		repo:      repo,
-		bisecter:  nil,
+		bisecter:  bisecter,
 		minimizer: minimizer,
 		inst:      inst,
 		startTime: time.Now(),
@@ -314,10 +315,11 @@ func (env *env) testSingle() (*testResult, error) {
 		return nil, err
 	}
 
-	err = env.repo.ApplyPatch(cfg.Kernel.Commit)
-	if err != nil {
-		return nil, err
-	}
+	env.log("Not applying patch for single-test...\n")
+	//err = env.repo.ApplyPatch(cfg.Kernel.Commit)
+	//if err != nil {
+	//	return nil, err
+	//}
 
 	env.log("testing if issue is reproducible on commit %v\n", cfg.Kernel.Commit)
 	env.commit = com
@@ -602,8 +604,8 @@ func (env *env) build() (*vcs.Commit, string, error) {
 		return nil, "", err
 	}
 
-	//bisectEnv, err := env.bisecter.EnvForCommit(
-	// 	env.cfg.DefaultCompiler, env.cfg.CompilerType, env.cfg.BinDir, current.Hash, env.kernelConfig)
+	bisectEnv, err := env.bisecter.EnvForCommit(
+		env.cfg.DefaultCompiler, env.cfg.CompilerType, env.cfg.BinDir, current.Hash, env.kernelConfig)
 	if err != nil {
 		return current, "", err
 	}
@@ -615,8 +617,8 @@ func (env *env) build() (*vcs.Commit, string, error) {
 		return current, "", fmt.Errorf("kernel clean failed: %v", err)
 	}
 	kern := &env.cfg.Kernel
-	_, imageDetails, err := env.inst.BuildKernel(env.cfg.DefaultCompiler, env.cfg.Ccache, kern.Userspace,
-		kern.Cmdline, kern.Sysctl, env.kernelConfig)
+	_, imageDetails, err := env.inst.BuildKernel(bisectEnv.Compiler, env.cfg.Ccache, kern.Userspace,
+		kern.Cmdline, kern.Sysctl, bisectEnv.KernelConfig)
 	env.log("kernel build time: %v", time.Since(buildStart))
 	if imageDetails.CompilerID != "" {
 		env.log("compiler: %v", imageDetails.CompilerID)
