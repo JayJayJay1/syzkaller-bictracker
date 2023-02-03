@@ -435,6 +435,7 @@ func (inst *inst) testInstance() error {
 	if err != nil {
 		return &TestError{Title: fmt.Sprintf("failed to copy test binary to VM: %v", err)}
 	}
+	fmt.Printf("Fuzzer bin copied to VM\n")
 
 	// If ExecutorBin is provided, it means that syz-executor is already in the image,
 	// so no need to copy it.
@@ -444,10 +445,14 @@ func (inst *inst) testInstance() error {
 		if err != nil {
 			return &TestError{Title: fmt.Sprintf("failed to copy test binary to VM: %v", err)}
 		}
+		fmt.Printf("Fuzzer bin copied to VM\n")
 	}
 
 	cmd := OldFuzzerCmd(fuzzerBin, executorBin, targets.TestOS, inst.cfg.TargetOS, inst.cfg.TargetArch, fwdAddr,
-		inst.cfg.Sandbox, inst.cfg.SandboxArg, 0, inst.cfg.Cover, true, inst.optionalFlags, inst.cfg.Timeouts.Slowdown)
+		inst.cfg.Sandbox, inst.cfg.SandboxArg, 0, false, true, inst.optionalFlags, inst.cfg.Timeouts.Slowdown)
+
+	fmt.Printf("Running cmd (cover should be null): %v\n", cmd)
+
 	outc, errc, err := inst.vm.Run(10*time.Minute*inst.cfg.Timeouts.Scale, nil, cmd)
 	if err != nil {
 		return fmt.Errorf("failed to run binary in VM: %v", err)
@@ -611,15 +616,13 @@ func FuzzerCmd(args *FuzzerCmdArgs) string {
 			{Name: "raw_cover", Value: fmt.Sprint(args.Optional.RawCover)},
 			{Name: "sandbox_arg", Value: fmt.Sprint(args.Optional.SandboxArg)},
 		}
-		optionalArg = " " + tool.OptionalFlags(flags)
+		fmt.Printf("Skipping optional flags: %v\n", flags)
+		// optionalArg = " " + tool.OptionalFlags(flags)
 	}
-	cmd := fmt.Sprintf("%v -executor=%v -name=%v -arch=%v%v -manager=%v -sandbox=%v"+
-		" -procs=%v -cover=1 -debug=%v -test=%v%v%v%v",
+	return fmt.Sprintf("%v -executor=%v -name=%v -arch=%v%v -manager=%v -sandbox=%v"+
+		" -procs=%v -cover=%v -debug=%v -test=%v%v%v%v",
 		args.Fuzzer, args.Executor, args.Name, args.Arch, osArg, args.FwdAddr, args.Sandbox,
-		args.Procs, args.Debug, args.Test, runtestArg, verbosityArg, optionalArg)
-
-	// .fmt.Printf("fuzzer cmd: %v\n", cmd)
-	return cmd
+		args.Procs, args.Cover, args.Debug, args.Test, runtestArg, verbosityArg, optionalArg)
 }
 
 func OldFuzzerCmd(fuzzer, executor, name, OS, arch, fwdAddr, sandbox string, sandboxArg, procs int,
@@ -658,13 +661,11 @@ func ExecprogCmd(execprog, executor, OS, arch, sandbox string, sandboxArg int, r
 		})
 	}
 
-	cmd := fmt.Sprintf("%v -executor=%v -arch=%v%v -sandbox=%v"+
-		" -procs=%v -repeat=%v -threaded=%v -collide=%v -cover %v %v",
+	return fmt.Sprintf("%v -executor=%v -arch=%v%v -sandbox=%v"+
+		" -procs=%v -repeat=%v -threaded=%v -collide=%v -cover=0%v %v",
 		execprog, executor, arch, osArg, sandbox,
 		procs, repeatCount, threaded, collide,
 		optionalArg, progFile)
-	// fmt.Printf("execprog cmd: %v", cmd)
-	return cmd
 }
 
 var MakeBin = func() string {
