@@ -252,7 +252,7 @@ func linuxAlterConfigs(cf *kconfig.ConfigFile, tags map[string]bool) {
 		// First, we disable coverage in pkg/bisect because it fails machine testing starting from 4.7.
 		// Second, at 6689da155bdcd17abfe4d3a8b1e245d9ed4b5f2c CONFIG_KCOV selects CONFIG_GCC_PLUGIN_SANCOV
 		// (why?), which is build broken for hundreds of revisions.
-		"KCOV": disableAlways,
+		// "KCOV": disableAlways,
 		// This helps to produce stable binaries in presence of kernel tag changes.
 		"LOCALVERSION_AUTO": disableAlways,
 		// BTF fails lots of builds with:

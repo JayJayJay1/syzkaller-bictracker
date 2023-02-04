@@ -315,11 +315,11 @@ func (env *env) testSingle() (*testResult, error) {
 		return nil, err
 	}
 
-	env.log("Not applying patch for single-test...\n")
-	//err = env.repo.ApplyPatch(cfg.Kernel.Commit)
-	//if err != nil {
-	//	return nil, err
-	//}
+	// env.log("Not applying patch for single-test...\n")
+	err = env.repo.ApplyPatch(cfg.Kernel.Commit)
+	if err != nil {
+		return nil, err
+	}
 
 	env.log("testing if issue is reproducible on commit %v\n", cfg.Kernel.Commit)
 	env.commit = com

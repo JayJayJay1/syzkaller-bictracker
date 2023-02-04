@@ -444,7 +444,7 @@ func (inst *inst) testInstance() error {
 		if err != nil {
 			return &TestError{Title: fmt.Sprintf("failed to copy test binary to VM: %v", err)}
 		}
-		fmt.Printf("Fuzzer bin copied to VM\n")
+		// fmt.Printf("Fuzzer bin copied to VM\n")
 	}
 
 	cmd := OldFuzzerCmd(fuzzerBin, executorBin, targets.TestOS, inst.cfg.TargetOS, inst.cfg.TargetArch, fwdAddr,
@@ -613,8 +613,7 @@ func FuzzerCmd(args *FuzzerCmdArgs) string {
 			{Name: "raw_cover", Value: fmt.Sprint(args.Optional.RawCover)},
 			{Name: "sandbox_arg", Value: fmt.Sprint(args.Optional.SandboxArg)},
 		}
-		fmt.Printf("Skipping optional flags: %v\n", flags)
-		// optionalArg = " " + tool.OptionalFlags(flags)
+		optionalArg = " " + tool.OptionalFlags(flags)
 	}
 	return fmt.Sprintf("%v -executor=%v -name=%v -arch=%v%v -manager=%v -sandbox=%v"+
 		" -procs=%v -cover=%v -debug=%v -test=%v%v%v%v",
