@@ -264,7 +264,7 @@ func (mon *monitor) monitorExecution() *report.Report {
 				}
 				return nil
 			default:
-				fmt.Printf("MONITOR: errc: %v\n", err)
+				// fmt.Printf("MONITOR: errc: %v\n", err)
 				// Note: connection lost can race with a kernel oops message.
 				// In such case we want to return the kernel oops.
 				crash := ""
@@ -274,7 +274,7 @@ func (mon *monitor) monitorExecution() *report.Report {
 				return mon.extractError(crash)
 			}
 		case out, ok := <-mon.outc:
-			// fmt.Printf("MONITOR1: %s", out)
+			// fmt.Printf("MONITOR1: %s\n", out)
 			if !ok {
 				mon.outc = nil
 				continue
@@ -326,7 +326,6 @@ func (mon *monitor) monitorExecution() *report.Report {
 func (mon *monitor) extractError(defaultError string) *report.Report {
 	diagOutput, diagWait := []byte{}, false
 	if defaultError != "" {
-		fmt.Printf("Diagnose by defaultError\n")
 		diagOutput, diagWait = mon.inst.diagnose(mon.createReport(defaultError))
 	}
 	// Give it some time to finish writing the error message.
@@ -359,6 +358,8 @@ func (mon *monitor) extractError(defaultError string) *report.Report {
 
 func (mon *monitor) createReport(defaultError string) *report.Report {
 	fmt.Printf("Creating report for instance number %d\n", mon.inst.index)
+	// fmt.Printf("Length of output is %d and contains %d hex values\n", len(mon.output), bytes.Count(mon.output, []byte{'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f'}))
+	// fmt.Printf("Length of fulloutput is %d and contains %d hex values\n", len(mon.fulloutput), bytes.Count(mon.output, []byte{'f', 'f', 'f', 'f', 'f', 'f', 'f', 'f'}))
 	rep := mon.reporter.ParseFrom(mon.output, mon.matchPos, mon.inst.index)
 	if rep == nil {
 		if defaultError == "" {

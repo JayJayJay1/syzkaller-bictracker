@@ -68,7 +68,7 @@ func (linux linux) build(params Params) (ImageDetails, error) {
 		return details, err
 	}
 	vmlinux := filepath.Join(params.OutputDir, "obj", "vmlinux")
-	fmt.Printf("§vmlinux path is: %s\n", vmlinux)
+	// fmt.Printf("§vmlinux path is: %s\n", vmlinux)
 	details.Signature, err = elfBinarySignature(vmlinux, params.Tracer)
 	return details, err
 }

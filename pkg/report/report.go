@@ -72,16 +72,17 @@ type Report struct {
 	Symbolized bool
 
 	Traces *[]Trace
+
+	CrashFrames *[]symbolizer.Frame
 }
 
 type Trace struct {
-	Thread         int
+	Thread         string
 	MaxNumMessages int
 	Messages       *[]string
 	Counter        *int
 	Pcs            *[]uint64
 	Frames         *[]symbolizer.Frame
-	CrashFrames    *[]symbolizer.Frame
 }
 
 type Type int

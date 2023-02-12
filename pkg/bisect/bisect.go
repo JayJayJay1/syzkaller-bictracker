@@ -84,7 +84,7 @@ type env struct {
 	flaky        bool
 }
 
-const MaxNumTests = 6 // number of tests we do per commit
+const MaxNumTests = 20 // number of tests we do per commit
 
 // Result describes bisection result:
 // 1. if bisection is conclusive, the single cause/fix commit in Commits
@@ -151,8 +151,10 @@ func RunSingle(btcfg *BicTrackerConfig) (*TestResult, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err = repo.CheckoutBranch(cfg.Kernel.Repo, cfg.Kernel.Branch); err != nil {
-		return nil, err
+	if cfg.Kernel.Commit != "commit_already_checked_out" {
+		if _, err = repo.CheckoutBranch(cfg.Kernel.Repo, cfg.Kernel.Branch); err != nil {
+			return nil, err
+		}
 	}
 	testRes, err := runImplSingle(btcfg, repo, inst)
 	if testRes == nil {
@@ -188,7 +190,9 @@ func runImplSingle(btcfg *BicTrackerConfig, repo vcs.Repo, inst instance.Env) (*
 	if err != nil {
 		return nil, err
 	}
-	defer env.repo.SwitchCommit(head.Hash)
+	if cfg.Kernel.Commit != "commit_already_checked_out" {
+		defer env.repo.SwitchCommit(head.Hash)
+	}
 	env.head = head
 	hostname, err := os.Hostname()
 	if err != nil {
@@ -305,24 +309,26 @@ func (env *env) testSingle() (*testResult, error) {
 		return nil, err
 	}
 
-	var err error
-	cfg.Kernel.Commit, err = env.identifyRewrittenCommit()
-	if err != nil {
-		return nil, err
-	}
-	com, err := env.repo.SwitchCommit(cfg.Kernel.Commit)
-	if err != nil {
-		return nil, err
+	if cfg.Kernel.Commit != "commit_already_checked_out" {
+		var err error
+		cfg.Kernel.Commit, err = env.identifyRewrittenCommit()
+		if err != nil {
+			return nil, err
+		}
+		_, err = env.repo.SwitchCommit(cfg.Kernel.Commit)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	// env.log("Not applying patch for single-test...\n")
-	err = env.repo.ApplyPatch(cfg.Kernel.Commit)
+	// env.log("Not applying patch...\n")
+	err := env.repo.ApplyPatch(cfg.Kernel.Commit)
 	if err != nil {
 		return nil, err
 	}
 
 	env.log("testing if issue is reproducible on commit %v\n", cfg.Kernel.Commit)
-	env.commit = com
+	env.commit = nil
 	env.kernelConfig = cfg.Kernel.Config
 	testRes, err := env.testWithTraces()
 	if err != nil {
@@ -706,7 +712,7 @@ func (env *env) test() (*testResult, error) {
 // Note: When this function returns an error, the bisection it was called from is aborted.
 // Hence recoverable errors must be handled and the callers must treat testResult with care.
 func (env *env) testWithTraces() (*testResult, error) {
-	fmt.Printf("testWithTraces\n")
+	// fmt.Printf("testWithTraces\n")
 	cfg := env.cfg
 	if cfg.Timeout != 0 && time.Since(env.startTime) > cfg.Timeout {
 		return nil, fmt.Errorf("bisection is taking too long (>%v), aborting", cfg.Timeout)
@@ -873,45 +879,47 @@ func (env *env) processResultsWithTraces(current *vcs.Commit, results []instance
 		case *instance.CrashError:
 			bad++
 			rep = err.Report
-
-			for traceIndex, trace := range *err.Report.Traces {
-				frames := trace.Frames
-				if frames == nil {
-					fmt.Printf("Error: frames == nil, skipping \n")
-				} else {
-					// fmt.Printf("Writing frames to file in %s\n", env.tracedir)
-					f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/trace_%v_%v.csv", i, traceIndex))
-					if err1 != nil {
-						panic(err1)
-					}
-					defer f.Close()
-					for _, frame := range *frames {
-						f.WriteString(fmt.Sprintf("%s,%s,%d,%v\n", frame.File, frame.Func, frame.Line, frame.Inline))
-					}
-				}
-				crashFrames := (*err.Report.Traces)[0].CrashFrames
-				if crashFrames == nil {
-					fmt.Printf("Error: crashFrames == nil, skipping \n")
-				} else {
-					// fmt.Printf("Writing crashframes to file in %s\n", env.tracedir)
-					f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/crashtrace_%v_%v.csv", i, traceIndex))
-					if err1 != nil {
-						panic(err1)
-					}
-					defer f.Close()
-					for _, frame := range *crashFrames {
-						f.WriteString(fmt.Sprintf("%s,%s,%d,%v\n", frame.File, frame.Func, frame.Line, frame.Inline))
+			if err.Report.Traces == nil {
+				fmt.Printf("Traces == nil, skipping \n")
+			} else {
+				for traceIndex, trace := range *err.Report.Traces {
+					frames := trace.Frames
+					if frames == nil {
+						fmt.Printf("Error: frames == nil, skipping \n")
+					} else {
+						// fmt.Printf("Writing frames to file in %s\n", env.tracedir)
+						f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/trace_%v_%v.csv", i, traceIndex))
+						if err1 != nil {
+							panic(err1)
+						}
+						defer f.Close()
+						for _, frame := range *frames {
+							f.WriteString(fmt.Sprintf("%s,%s,%d,%v\n", frame.File, frame.Func, frame.Line, frame.Inline))
+						}
 					}
 				}
-
-				// fmt.Printf("Writing title, type and alttitles to file\n")
-				f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/crash_info_%v_%v.csv", i, traceIndex))
+			}
+			if err.Report.CrashFrames == nil {
+				fmt.Printf("Error: crashFrames == nil, skipping \n")
+			} else {
+				// fmt.Printf("Writing crashframes to file in %s\n", env.tracedir)
+				f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/crashtrace_%v.csv", i))
 				if err1 != nil {
 					panic(err1)
 				}
 				defer f.Close()
-				f.WriteString(fmt.Sprintf("%s\n%s\n%s\n", err.Report.Title, err.Report.Type, err.Report.AltTitles))
+				for _, frame := range *err.Report.CrashFrames {
+					f.WriteString(fmt.Sprintf("%s,%s,%d,%v\n", frame.File, frame.Func, frame.Line, frame.Inline))
+				}
 			}
+
+			// fmt.Printf("Writing title, type and alttitles to file in %s\n", env.tracedir)
+			f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/crash_info_%v.csv", i))
+			if err1 != nil {
+				panic(err1)
+			}
+			defer f.Close()
+			f.WriteString(fmt.Sprintf("%s\n%s\n%s\n", err.Report.Title, err.Report.Type, err.Report.AltTitles))
 
 			verdicts = append(verdicts, fmt.Sprintf("crashed: %v", err))
 			output := err.Report.Report
@@ -921,6 +929,11 @@ func (env *env) processResultsWithTraces(current *vcs.Commit, results []instance
 			env.saveDebugFile(current.Hash, i, output)
 		default:
 			verdicts = append(verdicts, fmt.Sprintf("failed: %v", err))
+			f, err1 := os.Create(fmt.Sprintf(env.tracedir+"/invalid_%v.csv", i))
+			if err1 != nil {
+				panic(err1)
+			}
+			f.WriteString(fmt.Sprintf("%v", err))
 		}
 	}
 	unique := make(map[string]bool)

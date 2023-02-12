@@ -133,9 +133,9 @@ func (env *env) BuildKernel(compilerBin, ccacheBin, userspaceDir, cmdlineFile, s
 		SysctlFile:   sysctlFile,
 		Config:       kernelConfig,
 	}
-	fmt.Printf("§1 Building build.Image in dir \"%v\" \n", params.KernelDir)
+	// fmt.Printf("Building Image in dir \"%v\" \n", params.KernelDir)
 	details, err := build.Image(params)
-	fmt.Printf("§2 build.Image done \"%v\" \n", params.KernelDir)
+	// fmt.Printf("Building Image done\n")
 	if err != nil {
 		return "", details, err
 	}
@@ -255,7 +255,7 @@ func (env *env) Test(numVMs int, reproSyz, reproOpts, reproC []byte) ([]EnvTestR
 }
 
 func (env *env) TestWithTraces(numVMs int, reproSyz, reproOpts, reproC []byte) ([]EnvTestResultWithTraces, error) {
-	fmt.Printf("§1 env.TestWithTraces \n")
+	// fmt.Printf("§1 env.TestWithTraces \n")
 	if err := mgrconfig.Complete(env.cfg); err != nil {
 		return nil, err
 	}
@@ -328,7 +328,7 @@ func (inst *inst) testWithTraces() EnvTestResultWithTraces {
 			fmt.Printf("boot error: %v", bootErr)
 			testErr.Title, testErr.Output = bootErr.BootError()
 			ret.RawOutput = testErr.Output
-			rep := inst.reporter.Parse(testErr.Output, inst.vmIndex)
+			rep := inst.reporter.Parse(testErr.Output, inst.vmIndex) //, testErr.Output)
 			if rep != nil && rep.Type == report.UnexpectedReboot {
 				// Avoid detecting any boot crash as "unexpected kernel reboot".
 				rep = inst.reporter.ParseFrom(testErr.Output, rep.SkipPos, inst.vmIndex)
@@ -346,7 +346,7 @@ func (inst *inst) testWithTraces() EnvTestResultWithTraces {
 			testErr.Report = rep
 			testErr.Title = rep.Title
 		}
-		fmt.Printf("failed to create VM: %v, returning ret\n", err)
+		fmt.Printf("Failed to create VM.\n")
 		return ret
 	}
 	defer vmInst.Close()
@@ -375,7 +375,7 @@ func (inst *inst) test() EnvTestResult {
 			fmt.Printf("boot error: %v", bootErr)
 			testErr.Title, testErr.Output = bootErr.BootError()
 			ret.RawOutput = testErr.Output
-			rep := inst.reporter.Parse(testErr.Output, inst.vmIndex)
+			rep := inst.reporter.Parse(testErr.Output, inst.vmIndex) //, testErr.Output)
 			if rep != nil && rep.Type == report.UnexpectedReboot {
 				// Avoid detecting any boot crash as "unexpected kernel reboot".
 				rep = inst.reporter.ParseFrom(testErr.Output, rep.SkipPos, inst.vmIndex)
@@ -534,7 +534,7 @@ func (inst *inst) testReproAndCollectTraces() ([]byte, error, *[]report.Trace) {
 		if res != nil && res.Report != nil {
 			return res.RawOutput, &CrashError{Report: res.Report}, res.Report.Traces
 		}
-		fmt.Printf("res.Report is nil")
+		// fmt.Printf("res.Report is nil\n")
 		return res.RawOutput, nil, nil
 	}
 	out := []byte{}
@@ -553,7 +553,7 @@ func (inst *inst) testReproAndCollectTraces() ([]byte, error, *[]report.Trace) {
 			opts.Sandbox = "none"
 		}
 		opts.Repeat, opts.Threaded = true, true
-		fmt.Printf("reproducing crash with syz-executor (opts: %+v)...\n", opts)
+		fmt.Printf("reproducing crash with syz-executor...\n")
 		out, err, traces = transformError(execProg.RunSyzProg(inst.reproSyz,
 			inst.cfg.Timeouts.NoOutputRunningTime, opts))
 	}
@@ -658,7 +658,7 @@ func ExecprogCmd(execprog, executor, OS, arch, sandbox string, sandboxArg int, r
 	}
 
 	return fmt.Sprintf("%v -executor=%v -arch=%v%v -sandbox=%v"+
-		" -procs=%v -repeat=%v -threaded=%v -collide=%v -cover=0%v %v",
+		" -procs=%v -repeat=%v -threaded=%v -collide=%v -cover=1%v %v",
 		execprog, executor, arch, osArg, sandbox,
 		procs, repeatCount, threaded, collide,
 		optionalArg, progFile)

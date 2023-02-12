@@ -136,11 +136,22 @@ func ctorLinux(cfg *config) (reporterImpl, []string, error) {
 
 const contextConsole = "console"
 
-func extractCrashes(log string) *[]Trace {
-	fmt.Printf("creating report from output with %d PC's\n", strings.Count(log, "ffffffff"))
+func extractTraces(log string) *[]Trace {
+	fmt.Printf("creating report from output with %d hex values\n", strings.Count(log, "ffffffff"))
+
+	// fmt.Printf("Writing fulloutput to file\n")
+	// f, err := os.Create("/tmp/fulloutput" + strconv.Itoa(int(time.Now().Unix())) + ".txt")
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// defer f.Close()
+	// _, err = f.WriteString(log)
+	// if err != nil {
+	// 	panic(err)
+	// }
 
 	var traces []Trace
-	context := regexp.MustCompile(`\[ *[0-9.]+\]\[ *T([0-9]+)\] ([0-9]+)/([0-9]+)\](.*)`)
+	context := regexp.MustCompile(`\[ *[0-9.]+\]\[ *([TC][0-9]+)\] ([0-9]+)/([0-9]+)\](.*)`)
 	for _, line := range strings.Split(log, "\n") {
 		result := context.FindStringSubmatch(line)
 		if result == nil || len(result) != 5 {
@@ -153,10 +164,8 @@ func extractCrashes(log string) *[]Trace {
 			}
 			continue
 		}
-		thread, err := strconv.Atoi(result[1])
-		if err != nil {
-			panic(err)
-		}
+		thread := result[1]
+
 		num, err := strconv.Atoi(result[2])
 		if err != nil {
 			panic(err)
@@ -170,8 +179,8 @@ func extractCrashes(log string) *[]Trace {
 		var found bool = false
 		for _, trace := range traces {
 			if trace.Thread == thread && trace.MaxNumMessages == maxnum && *trace.Counter+1 == num {
-				if (*trace.Messages)[num] != "" && num != maxnum {
-					fmt.Printf("Warning: overwriting message %d/%d of thread %d\n", num, maxnum, thread)
+				if num != maxnum && (*trace.Messages)[num] != "" {
+					fmt.Printf("Warning: overwriting message %d/%d of context %s\n", num, maxnum, thread)
 				}
 				(*trace.Messages)[num] = rest
 				(*trace.Counter) += 1
@@ -182,7 +191,7 @@ func extractCrashes(log string) *[]Trace {
 		if !found {
 			//fmt.Printf("found new trace with thread %d and %d/%d messages\n", thread, num, maxnum)
 			messagesArray := make([]string, maxnum+1)
-			newTrace := Trace{thread, maxnum, &messagesArray, new(int), nil, nil, nil}
+			newTrace := Trace{thread, maxnum, &messagesArray, new(int), nil, nil}
 			*newTrace.Counter = num
 			traces = append(traces, newTrace)
 			(*newTrace.Messages)[num] = rest
@@ -191,7 +200,7 @@ func extractCrashes(log string) *[]Trace {
 	for i := 0; i < len(traces); i++ {
 		trace := &traces[i]
 		if len(*trace.Messages) != trace.MaxNumMessages+1 {
-			fmt.Printf("Warning: thread %d has %d messages, but expected %d\n", trace.Thread, len(*trace.Messages), trace.MaxNumMessages+1)
+			fmt.Printf("Warning: context %s has %d messages, but expected %d\n", trace.Thread, len(*trace.Messages), trace.MaxNumMessages+1)
 		}
 		missing := 0
 		pcs := []uint64{}
@@ -200,7 +209,7 @@ func extractCrashes(log string) *[]Trace {
 				missing += 1
 			} else {
 				if missing > 0 {
-					fmt.Printf("Warning: thread %d has %d missing messages between %d and %d\n", trace.Thread, missing, i-missing, i)
+					fmt.Printf("Warning: context %s has %d missing messages between %d and %d\n", trace.Thread, missing, i-missing, i)
 					missing = 0
 				}
 
@@ -213,14 +222,14 @@ func extractCrashes(log string) *[]Trace {
 					message = message[16:]
 				}
 				if len(message) != 0 {
-					fmt.Printf("Warning: thread %d has dangling message %s\n", trace.Thread, message)
+					fmt.Printf("Warning: context %s has dangling message %s\n", trace.Thread, message)
 				}
 
 			}
 		}
 		trace.Pcs = &pcs
 		if missing > 0 {
-			fmt.Printf("Warning: thread %d has %d missing messages between %d and %d\n", trace.Thread, missing, len(*trace.Messages)-missing, len(*trace.Messages))
+			fmt.Printf("Warning: context %s has %d missing messages between %d and %d\n", trace.Thread, missing, len(*trace.Messages)-missing, len(*trace.Messages))
 			missing = 0
 		}
 
@@ -239,11 +248,11 @@ func (ctx *linux) Parse(output []byte, instance int) *Report {
 		return nil
 	}
 	for questionable := false; ; questionable = true {
-		//fmt.Printf("Parsing for linux\n")
+		// fmt.Printf("Parsing for linux\n")
 		rep := &Report{
 			Output:   output,
 			StartPos: startPos,
-			Traces:   extractCrashes(string(output)),
+			Traces:   extractTraces(string(output)),
 		}
 		endPos, reportEnd, report, prefix := ctx.findReport(output, oops, startPos, context, questionable)
 		rep.EndPos = endPos
@@ -503,22 +512,24 @@ func (ctx *linux) symbolize(rep *Report) error {
 
 	if rep.Traces == nil {
 		fmt.Printf("Skipping as traces is nil")
-	} else if len(*rep.Traces) != 1 {
-		fmt.Printf("Skipping as %v traces\n", len(*rep.Traces))
+	} else if len(*rep.Traces) == 0 {
+		fmt.Printf("Skipping as 0 traces\n")
 	} else {
-		trace := &(*rep.Traces)[0]
-		if trace.Pcs == nil {
-			fmt.Printf("Skipping as no PCs for trace %v\n", trace)
-		} else {
-			frameArray, err := symb.SymbolizeArray(ctx.vmlinux, *trace.Pcs)
-			if err != nil {
-				return err
+		for i := range *rep.Traces {
+			trace := &(*rep.Traces)[i]
+			if trace.Pcs == nil {
+				fmt.Printf("Skipping %v as no PCs for trace %v\n", i, trace)
+			} else {
+				frameArray, err := symb.SymbolizeArray(ctx.vmlinux, *trace.Pcs)
+				if err != nil {
+					return err
+				}
+				trace.Frames = &frameArray
 			}
-			trace.Frames = &frameArray
 		}
-		trace.CrashFrames = &crashFrames
 	}
 	rep.Report = symbolized
+	rep.CrashFrames = &crashFrames
 	rep.reportPrefixLen = prefix
 	return nil
 }

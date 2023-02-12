@@ -133,11 +133,11 @@ func main() {
 
 	if result != nil {
 		if result.Verdict == vcs.BisectBad {
-			fmt.Printf("§Veridct is bad§\n")
+			fmt.Printf("§Verdict is bad§\n")
 		} else if result.Verdict == vcs.BisectGood {
-			fmt.Printf("§Veridct is good§\n")
+			fmt.Printf("§Verdict is good§\n")
 		} else {
-			fmt.Printf("§Veridct is skip§\n")
+			fmt.Printf("§Verdict is skip§\n")
 		}
 		// fmt.Printf("Report: %+v\n\n\n", result.Rep.Output)
 	} else {

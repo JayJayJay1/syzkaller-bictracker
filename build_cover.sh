@@ -1,0 +1,3 @@
+cd .. && ./patch.sh && cd syzkaller
+GOOS=linux GOARCH=amd64 go build "-ldflags=-s -w -X github.com/google/syzkaller/prog.GitRevision=`git rev-parse HEAD` -X 'github.com/google/syzkaller/prog.gitRevisionDate=`git log -n 1 --format="%cd" --date=format:%Y%m%d-%H%M%S`'" -o ./bin/syz-cover github.com/google/syzkaller/tools/syz-cover
+./bin/syz-cover -csv coverage/out.csv -kernel_src=/data/jakob.steeg-thesis/autobisect/linux/ coverage/cover.out.*

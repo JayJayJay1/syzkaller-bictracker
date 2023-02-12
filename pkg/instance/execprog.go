@@ -107,7 +107,7 @@ func (inst *ExecProgInstance) runCommand(command string, duration time.Duration)
 		command = inst.StraceBin + filterCalls + ` -s 100 -x -f ` + command
 		prefixOutput = []byte(fmt.Sprintf("%s\n\n<...>\n", command))
 	}
-	fmt.Printf("Running (strace) command: %s\n", command)
+	fmt.Printf("cmd: %s\n", command)
 	outc, errc, err := inst.VMInstance.Run(duration, nil, command)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run command in VM: %v", err)
@@ -121,7 +121,14 @@ func (inst *ExecProgInstance) runCommand(command string, duration time.Duration)
 	}
 	if result.Report == nil {
 		inst.Logf(2, "program did not crash")
+		// if result.RawOutput != nil {
+		// 	fmt.Printf("program did not crash and contains %d hex values\n", strings.Count(string(result.RawOutput), "ffffff"))
+		// }
 	} else {
+		// fmt.Printf("program crashed!")
+		// if result.RawOutput != nil {
+		// 	fmt.Printf("program crashed! and contains %d hex values\n", strings.Count(string(result.RawOutput), "ffffff"))
+		// }
 		if err := inst.reporter.Symbolize(result.Report); err != nil {
 			return nil, fmt.Errorf("failed to symbolize report: %v", err)
 		}
