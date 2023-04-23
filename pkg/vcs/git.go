@@ -256,23 +256,28 @@ func (git *git) ApplyPatch(commit string) error {
 	// git log --pretty=format:%H -S "kernel/panic.c" -- kernel/panic.c
 	lastChangeCommit, err := git.git("log", "--pretty=format:%H", "-n", "1", "--", "kernel/panic.c")
 	if err != nil {
-		panic(err)
+		fmt.Printf("Error searching for last changed commit: %v\n", err)
+		return nil
 	}
 
 	patch, ok := patchesApplicableFor[string(lastChangeCommit)]
-	if !ok {
-		for _, patchToTest := range availablePatchesInOrder {
-			if _, err := git.git("apply", "--check", "/data/jakob.steeg-thesis/workspace/patches/"+patchToTest+".txt"); err == nil {
-				fmt.Println("Applied patch " + patchToTest + " by testing all patches.\n")
-				return nil
-			}
+
+	if ok {
+		fmt.Println("Applying patch " + patch + "\n")
+		if _, err := git.git("apply", "/data/jakob.steeg-thesis/workspace/patches/"+patch+".txt"); err != nil {
+			fmt.Printf("Error, patch not applied: %v\n", err)
+		} else {
+			return nil
 		}
-		panic("No patch found for commit " + commit)
 	}
-	fmt.Println("Applying patch " + patch + "\n")
-	if _, err := git.git("apply", "/data/jakob.steeg-thesis/workspace/patches/"+patch+".txt"); err != nil {
-		panic(err)
+
+	for _, patchToTest := range availablePatchesInOrder {
+		if _, err := git.git("apply", "--check", "/data/jakob.steeg-thesis/workspace/patches/"+patchToTest+".txt"); err == nil {
+			fmt.Println("Applied patch " + patchToTest + " by testing all patches.\n")
+			return nil
+		}
 	}
+	fmt.Printf("No patch found for commit " + commit + ", patch not applied.\n")
 	return nil
 }
 

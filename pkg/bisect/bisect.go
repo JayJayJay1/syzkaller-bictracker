@@ -84,7 +84,7 @@ type env struct {
 	flaky        bool
 }
 
-const MaxNumTests = 20 // number of tests we do per commit
+const MaxNumTests = 8 // number of tests we do per commit
 
 // Result describes bisection result:
 // 1. if bisection is conclusive, the single cause/fix commit in Commits

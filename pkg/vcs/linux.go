@@ -137,7 +137,8 @@ func (ctx *linux) EnvForCommit(
 ) (*BisectEnv, error) {
 	tagList, err := ctx.previousReleaseTags(commit, true, false, false)
 	if err != nil {
-		return nil, err
+		tagList = []string{}
+		fmt.Printf("failed to get previous release tags: %v\n", err)
 	}
 	tags := make(map[string]bool)
 	for _, tag := range tagList {
